@@ -459,6 +459,8 @@ class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     }
 };
 
+GamepadAdvertisedDeviceCallbacks gamepadCallbacksInstance;
+
 void onScanComplete(BLEScanResults results) {
   isBleScanning = false;
   if (!doConnectGamepad && connectedGamepadName.length() == 0) {
@@ -476,11 +478,11 @@ void startBleGamepadScan() {
 
   isBleScanning = true;
   BLEScan* pBLEScan = BLEDevice::getScan();
-  pBLEScan->setAdvertisedDeviceCallbacks(new GamepadAdvertisedDeviceCallbacks());
+  pBLEScan->setAdvertisedDeviceCallbacks(&gamepadCallbacksInstance);
   pBLEScan->setActiveScan(true);
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);
-  pBLEScan->start(3, onScanComplete, false); // Quick 3-second non-blocking auto-scan
+  pBLEScan->setInterval(160); // 160ms interval
+  pBLEScan->setWindow(40);    // 40ms window (leaves 75% radio time for Wi-Fi beacon & connection handshakes!)
+  pBLEScan->start(2, onScanComplete, false); // Quick 2-second non-blocking auto-scan
 }
 
 void handleGamepadConnectionLoop() {
@@ -530,9 +532,9 @@ void handleGamepadConnectionLoop() {
     return;
   }
 
-  // 2. Standalone Background Auto-Reconnect: Scan automatically if no controller is connected!
-  if (pGamepadClient == nullptr || !pGamepadClient->isConnected()) {
-    if (millis() - lastAutoScanMs > 4000 && !isBleScanning) {
+  // 2. Standalone Background Auto-Reconnect: Scan automatically if no controller is connected and phone is not busy
+  if (WiFi.softAPgetStationNum() == 0 && (pGamepadClient == nullptr || !pGamepadClient->isConnected())) {
+    if (millis() - lastAutoScanMs > 6000 && !isBleScanning) {
       lastAutoScanMs = millis();
       startBleGamepadScan();
     }
@@ -1587,7 +1589,9 @@ void setup() {
   
   // 1. Initialize WiFi Access Point IMMEDIATELY (Priority #1)
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
+  WiFi.setSleep(false);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  WiFi.softAP(ssid, password, 1, 0, 4);
   Serial.println("Starting TinkDrive Access Point...");
   Serial.print("AP IP Address: ");
   Serial.println(WiFi.softAPIP()); 
