@@ -24,15 +24,15 @@ const int pinRight   = 7;  // IN4 Relay
 #define I2S_LRC_PIN     16 // Left/Right Word Select Clock
 #define I2S_DIN_PIN     18 // Digital Data Input
 
-// Open-Drain / Hi-Z Tri-State Relay Control Helpers
+// Open-Drain / Pullup Relay Control Helpers
 // Solves 5V active-low optocoupler 3.3V leakage keeping relays permanently engaged!
 void setRelayOn(int pin) {
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, LOW); // Pull to GND -> Full 5V across optocoupler LED -> Relay ENGAGED!
+  digitalWrite(pin, LOW); // Pull to GND -> Full voltage across optocoupler LED -> Relay ENGAGED!
 }
 
 void setRelayOff(int pin) {
-  pinMode(pin, INPUT); // High-Impedance Input (Hi-Z) -> Same as physically disconnecting signal wire -> Relay DISENGAGED!
+  pinMode(pin, INPUT_PULLUP); // High-Impedance Pullup -> Pulls pin to 3.3V, stops current leakage, disengages relay safely!
 }
 
 // Onboard RGB LED helper (ESP32-S3 built-in WS2812 LED)
@@ -162,7 +162,8 @@ void playI2STone(uint32_t freq, uint32_t durationMs) {
       phase += phaseInc;
       if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
     }
-    i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, portMAX_DELAY);
+    // NON-BLOCKING TIMEOUT (20ms max wait) to prevent CPU hang if I2S DMA buffers are full
+    i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(20));
   }
 }
 
@@ -767,7 +768,7 @@ const char* htmlPage = R"HTML(
             <span class="pin-state-badge" id="badgePin4">Hi-Z (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Forward Drive</div>
-          <div class="pin-expected" id="expPin4">Volt: ~3.3V-5V (Floating)</div>
+          <div class="pin-expected" id="expPin4">Volt: ~3.3V-5V (Pullup)</div>
         </div>
 
         <!-- GPIO 5: Reverse -->
@@ -777,7 +778,7 @@ const char* htmlPage = R"HTML(
             <span class="pin-state-badge" id="badgePin5">Hi-Z (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Reverse Drive</div>
-          <div class="pin-expected" id="expPin5">Volt: ~3.3V-5V (Floating)</div>
+          <div class="pin-expected" id="expPin5">Volt: ~3.3V-5V (Pullup)</div>
         </div>
 
         <!-- GPIO 6: Steer Left -->
@@ -787,7 +788,7 @@ const char* htmlPage = R"HTML(
             <span class="pin-state-badge" id="badgePin6">Hi-Z (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Left</div>
-          <div class="pin-expected" id="expPin6">Volt: ~3.3V-5V (Floating)</div>
+          <div class="pin-expected" id="expPin6">Volt: ~3.3V-5V (Pullup)</div>
         </div>
 
         <!-- GPIO 7: Steer Right -->
@@ -797,7 +798,7 @@ const char* htmlPage = R"HTML(
             <span class="pin-state-badge" id="badgePin7">Hi-Z (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Right</div>
-          <div class="pin-expected" id="expPin7">Volt: ~3.3V-5V (Floating)</div>
+          <div class="pin-expected" id="expPin7">Volt: ~3.3V-5V (Pullup)</div>
         </div>
       </div>
     </div>
@@ -917,16 +918,18 @@ serial.write("C\n") # Auto-Center Steering</pre>
       } else {
         card.classList.remove('active-low');
         badge.innerText = 'Hi-Z (OFF)';
-        exp.innerText = 'Volt: ~3.3V-5V (Floating)';
+        exp.innerText = 'Volt: ~3.3V-5V (Pullup)';
       }
     };
 
     const sendCommand = (cmd) => {
-      fetch('/' + cmd).catch(e => console.error(e));
+      fetch('/' + cmd)
+        .then(r => r.text())
+        .then(() => fetchStatus())
+        .catch(e => console.error(e));
     };
 
-    // Heartbeat & Live Pin Status Poll
-    setInterval(() => {
+    const fetchStatus = () => {
       fetch('/status')
         .then(r => r.json())
         .then(d => {
@@ -936,7 +939,10 @@ serial.write("C\n") # Auto-Center Steering</pre>
           updatePinHud(7, d.pin7 === 'ON');
         })
         .catch(() => {});
-    }, 400);
+    };
+
+    // Gentle Heartbeat & Live Pin Status Poll (every 1.5 seconds to prevent TCP socket exhaustion)
+    setInterval(fetchStatus, 1500);
 
     const triggerBleScan = () => {
       const statusEl = document.getElementById('pairStatus');
@@ -1223,7 +1229,7 @@ void sendHtmlWithNoCache() {
 void setup() {
   Serial.begin(115200);
   
-  // Initialize all relay pins to High-Impedance DISENGAGED mode
+  // Initialize all relay pins to High-Impedance Pullup DISENGAGED mode
   setRelayOff(pinForward);
   setRelayOff(pinBack);
   setRelayOff(pinLeft);
