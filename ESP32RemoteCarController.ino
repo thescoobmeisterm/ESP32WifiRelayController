@@ -24,9 +24,16 @@ const int pinRight   = 7;  // IN4 Relay
 #define I2S_LRC_PIN     16 // Left/Right Word Select Clock
 #define I2S_DIN_PIN     18 // Digital Data Input
 
-// Active Low Relay Logic
-#define RELAY_ON LOW
-#define RELAY_OFF HIGH
+// Open-Drain / Hi-Z Tri-State Relay Control Helpers
+// Solves 5V active-low optocoupler 3.3V leakage keeping relays permanently engaged!
+void setRelayOn(int pin) {
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW); // Pull to GND -> Full 5V across optocoupler LED -> Relay ENGAGED!
+}
+
+void setRelayOff(int pin) {
+  pinMode(pin, INPUT); // High-Impedance Input (Hi-Z) -> Same as physically disconnecting signal wire -> Relay DISENGAGED!
+}
 
 // Onboard RGB LED helper (ESP32-S3 built-in WS2812 LED)
 #ifndef RGB_BUILTIN
@@ -781,7 +788,7 @@ serial.write("C\n") # Auto-Center Steering</pre>
   <!-- Telemetry Status -->
   <div class="telemetry">
     <span class="status-dot"></span>
-    <span>SYSTEM ONLINE // I2S AUDIO & DIRECT BLE READY</span>
+    <span>SYSTEM ONLINE // OPEN-DRAIN RELAY DRIVER READY</span>
   </div>
 
   <script>
@@ -903,8 +910,8 @@ serial.write("C\n") # Auto-Center Steering</pre>
 )HTML";
 
 void stopDriving() {
-  digitalWrite(pinForward, RELAY_OFF);
-  digitalWrite(pinBack, RELAY_OFF);
+  setRelayOff(pinForward);
+  setRelayOff(pinBack);
   currentDriveState = DRIVE_STOP;
 }
 
@@ -924,8 +931,8 @@ void stopSteering() {
   if (currentSteerState != STEER_IDLE) {
      updateSteeringPosition();
   }
-  digitalWrite(pinLeft, RELAY_OFF);
-  digitalWrite(pinRight, RELAY_OFF);
+  setRelayOff(pinLeft);
+  setRelayOff(pinRight);
   currentSteerState = STEER_IDLE;
 }
 
@@ -968,13 +975,13 @@ void processCommand(String cmd) {
 
   if (cmd == "forward" || cmd == "F" || cmd == "f" || cmd == "W" || cmd == "w") {
     stopDriving(); delay(50);
-    digitalWrite(pinForward, RELAY_ON);
+    setRelayOn(pinForward);
     currentDriveState = DRIVE_FORWARD;
     playI2STone(300, 150);
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
     stopDriving(); delay(50);
-    digitalWrite(pinBack, RELAY_ON);
+    setRelayOn(pinBack);
     currentDriveState = DRIVE_BACK;
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
@@ -983,7 +990,7 @@ void processCommand(String cmd) {
       stopSteering(); delay(50);
       currentSteerState = STEER_LEFT;
       lastSteerUpdateMs = millis();
-      digitalWrite(pinLeft, RELAY_ON);
+      setRelayOn(pinLeft);
       playI2STone(650, 80);
     }
   }
@@ -993,7 +1000,7 @@ void processCommand(String cmd) {
       stopSteering(); delay(50);
       currentSteerState = STEER_RIGHT;
       lastSteerUpdateMs = millis();
-      digitalWrite(pinRight, RELAY_ON);
+      setRelayOn(pinRight);
       playI2STone(750, 80);
     }
   }
@@ -1090,11 +1097,11 @@ void sendHtmlWithNoCache() {
 void setup() {
   Serial.begin(115200);
   
-  // Init pins
-  pinMode(pinForward, OUTPUT);
-  pinMode(pinBack, OUTPUT);
-  pinMode(pinLeft, OUTPUT);
-  pinMode(pinRight, OUTPUT);
+  // Initialize all relay pins to High-Impedance DISENGAGED mode
+  setRelayOff(pinForward);
+  setRelayOff(pinBack);
+  setRelayOff(pinLeft);
+  setRelayOff(pinRight);
   
   stopAll();
 
@@ -1201,7 +1208,7 @@ void loop() {
              stopSteering(); delay(50);
              currentSteerState = STEER_LEFT;
              lastSteerUpdateMs = millis();
-             digitalWrite(pinLeft, RELAY_ON);
+             setRelayOn(pinLeft);
          } else {
              updateSteeringPosition();
          }
@@ -1210,7 +1217,7 @@ void loop() {
              stopSteering(); delay(50);
              currentSteerState = STEER_RIGHT;
              lastSteerUpdateMs = millis();
-             digitalWrite(pinRight, RELAY_ON);
+             setRelayOn(pinRight);
          } else {
              updateSteeringPosition();
          }
