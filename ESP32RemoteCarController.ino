@@ -1586,6 +1586,7 @@ void sendHtmlWithNoCache() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   
   // 1. Initialize WiFi Access Point IMMEDIATELY (Priority #1)
   WiFi.mode(WIFI_AP);
@@ -1710,7 +1711,6 @@ void setup() {
     Serial.println("Found Saved Gamepad in Flash Memory: " + savedName + " [" + savedGamepadMac + "]");
     bleStatusMsg = "Auto-searching for saved controller: " + (savedName.length() > 0 ? savedName : savedGamepadMac);
   }
-  startBleGamepadScan();
 }
 
 void loop() {
