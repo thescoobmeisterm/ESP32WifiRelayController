@@ -1,0 +1,16 @@
+# Arduino / ESP32 build outputs
+build/
+*.elf
+*.hex
+*.bin
+*.map
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Antigravity system logs
+.system_generated/
