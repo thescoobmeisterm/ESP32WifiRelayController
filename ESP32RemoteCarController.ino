@@ -24,15 +24,15 @@ const int pinRight   = 7;  // IN4 Relay
 #define I2S_LRC_PIN     16 // Left/Right Word Select Clock
 #define I2S_DIN_PIN     18 // Digital Data Input
 
-// Standard Active-Low Relay Control Helpers
+// Standard Active-HIGH Relay Control Helpers (for HIGH-jumpered boards)
 void setRelayOn(int pin) {
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, LOW);  // 0V (GND) -> Optocoupler conducts -> Relay ENGAGED!
+  digitalWrite(pin, HIGH); // 3.3V (HIGH) -> Triggers Active-HIGH Relay -> Relay ENGAGED!
 }
 
 void setRelayOff(int pin) {
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, HIGH); // HIGH (3.3V) -> 0V across optocoupler -> Relay DISENGAGED!
+  digitalWrite(pin, LOW);  // 0.0V (LOW) -> 0V to ground -> Relay DISENGAGED (OFF)!
 }
 
 // Onboard RGB LED helper (ESP32-S3 built-in WS2812 LED)
@@ -769,40 +769,40 @@ const char* htmlPage = R"HTML(
         <div class="pin-card" id="cardPin4">
           <div class="pin-header">
             <span>GPIO 4 [IN1]</span>
-            <span class="pin-state-badge" id="badgePin4">Hi-Z (OFF)</span>
+            <span class="pin-state-badge" id="badgePin4">0.0V (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Forward Drive</div>
-          <div class="pin-expected" id="expPin4">Volt: ~3.3V-5V (Pullup)</div>
+          <div class="pin-expected" id="expPin4">Signal: 0.0V (DISENGAGED)</div>
         </div>
 
         <!-- GPIO 5: Reverse -->
         <div class="pin-card" id="cardPin5">
           <div class="pin-header">
             <span>GPIO 5 [IN2]</span>
-            <span class="pin-state-badge" id="badgePin5">Hi-Z (OFF)</span>
+            <span class="pin-state-badge" id="badgePin5">0.0V (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Reverse Drive</div>
-          <div class="pin-expected" id="expPin5">Volt: ~3.3V-5V (Pullup)</div>
+          <div class="pin-expected" id="expPin5">Signal: 0.0V (DISENGAGED)</div>
         </div>
 
         <!-- GPIO 6: Steer Left -->
         <div class="pin-card" id="cardPin6">
           <div class="pin-header">
             <span>GPIO 6 [IN3]</span>
-            <span class="pin-state-badge" id="badgePin6">Hi-Z (OFF)</span>
+            <span class="pin-state-badge" id="badgePin6">0.0V (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Left</div>
-          <div class="pin-expected" id="expPin6">Volt: ~3.3V-5V (Pullup)</div>
+          <div class="pin-expected" id="expPin6">Signal: 0.0V (DISENGAGED)</div>
         </div>
 
         <!-- GPIO 7: Steer Right -->
         <div class="pin-card" id="cardPin7">
           <div class="pin-header">
             <span>GPIO 7 [IN4]</span>
-            <span class="pin-state-badge" id="badgePin7">Hi-Z (OFF)</span>
+            <span class="pin-state-badge" id="badgePin7">0.0V (OFF)</span>
           </div>
           <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Right</div>
-          <div class="pin-expected" id="expPin7">Volt: ~3.3V-5V (Pullup)</div>
+          <div class="pin-expected" id="expPin7">Signal: 0.0V (DISENGAGED)</div>
         </div>
       </div>
     </div>
@@ -917,12 +917,12 @@ serial.write("C\n") # Auto-Center Steering</pre>
       const exp = document.getElementById('expPin' + pinNum);
       if (isOn) {
         card.classList.add('active-low');
-        badge.innerText = '0.0V (LOW)';
-        exp.innerText = 'Signal: 0V SINK (ENGAGED)';
+        badge.innerText = '3.3V (HIGH)';
+        exp.innerText = 'Signal: 3.3V SOURCE (ENGAGED)';
       } else {
         card.classList.remove('active-low');
-        badge.innerText = 'Hi-Z (OFF)';
-        exp.innerText = 'Volt: ~3.3V-5V (Pullup)';
+        badge.innerText = '0.0V (OFF)';
+        exp.innerText = 'Signal: 0.0V (DISENGAGED)';
       }
     };
 
