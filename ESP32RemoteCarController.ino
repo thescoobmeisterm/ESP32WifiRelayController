@@ -1586,7 +1586,7 @@ void sendHtmlWithNoCache() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
+  Serial.setTimeout(50);
   
   // 1. Initialize WiFi Access Point IMMEDIATELY (Priority #1)
   WiFi.mode(WIFI_AP);
