@@ -119,6 +119,8 @@ bool isDeviceConnected() {
   return (WiFi.softAPgetStationNum() > 0) || deviceConnected;
 }
 
+bool isI2SReady = false;
+
 // I2S Hardware Audio Generator for MAX98357A Amplifier
 void initI2SAudio() {
   i2s_config_t i2s_config = {
@@ -142,9 +144,11 @@ void initI2SAudio() {
   i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM, &pin_config);
   i2s_zero_dma_buffer(I2S_NUM);
+  isI2SReady = true;
 }
 
 void playI2STone(uint32_t freq, uint32_t durationMs) {
+  if (!isI2SReady) return;
   int sampleRate = 44100;
   int numSamples = (sampleRate * durationMs) / 1000;
   int16_t samples[128];
@@ -1239,16 +1243,17 @@ void setup() {
   // Start DNS Server for Captive Portal
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
 
-  // 2. Initialize all relay pins to High-Impedance Pullup DISENGAGED mode
+  // 2. Initialize MAX98357A I2S Digital Audio
+  initI2SAudio();
+
+  // 3. Initialize all relay pins to High-Impedance Pullup DISENGAGED mode
   setRelayOff(pinForward);
   setRelayOff(pinBack);
   setRelayOff(pinLeft);
   setRelayOff(pinRight);
   
-  stopAll();
-
-  // 3. Initialize MAX98357A I2S Digital Audio
-  initI2SAudio();
+  stopDriving();
+  stopSteering();
   playBootChime();
 
   // 4. Initialize BLE Device
