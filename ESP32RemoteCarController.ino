@@ -381,44 +381,54 @@ void gamepadNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, ui
   }
 }
 
+BLEAdvertisedDevice* targetGamepadDevice = nullptr;
+bool doConnectGamepad = false;
+String bleStatusMsg = "Ready to scan for controllers";
+String connectedGamepadName = "";
+
 // BLE Central Scanner Callbacks for discovering ANY Wireless Gamepad
 class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
       String name = advertisedDevice.getName().c_str();
+      String addr = advertisedDevice.getAddress().toString().c_str();
       Serial.print("BLE Device Found: ");
       Serial.print(name);
       Serial.print(" [");
-      Serial.print(advertisedDevice.getAddress().toString().c_str());
+      Serial.print(addr);
       Serial.println("]");
 
-      if (advertisedDevice.isAdvertisingService(BLEUUID((uint16_t)0x1812)) ||
-          name.indexOf("Controller") != -1 || 
-          name.indexOf("Gamepad") != -1 || 
-          name.indexOf("Joy-Con") != -1 || 
-          name.indexOf("Wireless") != -1 || 
-          name.indexOf("Pro") != -1 ||
-          name.indexOf("8BitDo") != -1 ||
-          name.indexOf("Xbox") != -1) {
+      bool isGamepad = advertisedDevice.isAdvertisingService(BLEUUID((uint16_t)0x1812)) ||
+                       (advertisedDevice.haveAppearance() && (advertisedDevice.getAppearance() == 0x03C4 || advertisedDevice.getAppearance() == 0x03C3)) ||
+                       name.indexOf("Controller") != -1 || 
+                       name.indexOf("Gamepad") != -1 || 
+                       name.indexOf("Joy-Con") != -1 || 
+                       name.indexOf("Wireless") != -1 || 
+                       name.indexOf("Pro") != -1 ||
+                       name.indexOf("8BitDo") != -1 ||
+                       name.indexOf("Xbox") != -1 ||
+                       name.indexOf("DualSense") != -1 ||
+                       name.indexOf("DualShock") != -1 ||
+                       name.indexOf("DUALSHOCK") != -1 ||
+                       name.indexOf("SHANWAN") != -1 ||
+                       name.indexOf("ipega") != -1 ||
+                       name.indexOf("Mocute") != -1 ||
+                       name.indexOf("GameSir") != -1 ||
+                       name.indexOf("Flydigi") != -1 ||
+                       name.indexOf("GEN GAME") != -1 ||
+                       name.indexOf("VR-") != -1 ||
+                       name.indexOf("BT-") != -1 ||
+                       name.indexOf("STK-") != -1 ||
+                       name.indexOf("PG-") != -1;
+
+      if (isGamepad && !doConnectGamepad) {
+        String displayName = name.length() > 0 ? name : ("Device " + addr);
+        Serial.println(">>> MATCHED BLE GAMEPAD (" + displayName + ")! PREPARING CONNECTION...");
+        bleStatusMsg = "Found: " + displayName + " - Connecting...";
         
-        Serial.println(">>> MATCHED BLE GAMEPAD! CONNECTING...");
+        targetGamepadDevice = new BLEAdvertisedDevice(advertisedDevice);
+        doConnectGamepad = true;
         BLEDevice::getScan()->stop();
         isBleScanning = false;
-
-        pGamepadClient = BLEDevice::createClient();
-        if (pGamepadClient->connect(&advertisedDevice)) {
-          Serial.println(">>> CONNECTED TO WIRELESS GAMEPAD!");
-          deviceConnected = true;
-          playSuccessChime(); // Victory chime
-
-          // Obtain HID Service / Characteristics
-          BLERemoteService* pRemoteService = pGamepadClient->getService(BLEUUID((uint16_t)0x1812));
-          if (pRemoteService != nullptr) {
-            BLERemoteCharacteristic* pChar = pRemoteService->getCharacteristic(BLEUUID((uint16_t)0x2A4D));
-            if (pChar != nullptr && pChar->canNotify()) {
-              pChar->registerForNotify(gamepadNotifyCallback);
-            }
-          }
-        }
       }
     }
 };
@@ -426,18 +436,56 @@ class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 void onScanComplete(BLEScanResults results) {
   Serial.println("Async BLE Scan Complete!");
   isBleScanning = false;
+  if (!doConnectGamepad && connectedGamepadName.length() == 0) {
+    bleStatusMsg = "Scan complete: No controllers found. Put controller in pairing mode & retry!";
+  }
 }
 
 void startBleGamepadScan() {
   if (isBleScanning) return;
   Serial.println("Starting Async BLE Gamepad Scan for Wireless Controllers...");
   isBleScanning = true;
+  bleStatusMsg = "🔍 Scanning for wireless controllers (10s)...";
   BLEScan* pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new GamepadAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
   pBLEScan->start(10, onScanComplete, false); // ASYNC NON-BLOCKING SCAN!
+}
+
+void handleGamepadConnectionLoop() {
+  if (!doConnectGamepad || targetGamepadDevice == nullptr) return;
+  
+  String devName = targetGamepadDevice->getName().c_str();
+  if (devName.length() == 0) devName = targetGamepadDevice->getAddress().toString().c_str();
+  
+  Serial.println("Connecting to BLE Gamepad: " + devName);
+  pGamepadClient = BLEDevice::createClient();
+  
+  if (pGamepadClient->connect(targetGamepadDevice)) {
+    Serial.println(">>> CONNECTED TO WIRELESS GAMEPAD: " + devName);
+    deviceConnected = true;
+    connectedGamepadName = devName;
+    bleStatusMsg = "CONNECTED TO " + devName + "!";
+    playSuccessChime();
+
+    // Discover HID Service
+    BLERemoteService* pRemoteService = pGamepadClient->getService(BLEUUID((uint16_t)0x1812));
+    if (pRemoteService != nullptr) {
+      BLERemoteCharacteristic* pChar = pRemoteService->getCharacteristic(BLEUUID((uint16_t)0x2A4D));
+      if (pChar != nullptr && pChar->canNotify()) {
+        pChar->registerForNotify(gamepadNotifyCallback);
+      }
+    }
+  } else {
+    Serial.println("Failed to connect to BLE Gamepad.");
+    bleStatusMsg = "Connection failed to " + devName + ". Please retry pairing!";
+  }
+  
+  doConnectGamepad = false;
+  delete targetGamepadDevice;
+  targetGamepadDevice = nullptr;
 }
 
 const char* htmlPage = R"HTML(
@@ -1100,6 +1148,7 @@ serial.write("C\n") # Auto-Center Steering</pre>
     // Gentle Heartbeat & Live Pin Status Poll (every 1.5 seconds to prevent TCP socket exhaustion)
     setInterval(fetchStatus, 1500);
 
+    let scanPollTimer = null;
     const triggerBleScan = () => {
       const statusEl = document.getElementById('pairStatus');
       statusEl.innerText = '🔍 SCANNING FOR WIRELESS CONTROLLER (10s)...';
@@ -1108,12 +1157,35 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .then(res => res.text())
         .then(msg => {
           statusEl.innerText = msg;
-          statusEl.style.color = '#00ff88';
+          statusEl.style.color = '#00f3ff';
+          if (scanPollTimer) clearInterval(scanPollTimer);
+          scanPollTimer = setInterval(pollBleStatus, 750);
         })
         .catch(err => {
           statusEl.innerText = 'SCAN ERROR: ' + err;
           statusEl.style.color = '#ef4444';
         });
+    };
+
+    const pollBleStatus = () => {
+      fetch('/ble_status')
+        .then(r => r.json())
+        .then(data => {
+          const statusEl = document.getElementById('pairStatus');
+          if (data.status) {
+            statusEl.innerText = data.status;
+            if (data.connected && data.connected.length > 0) {
+              statusEl.style.color = '#00ff88';
+              if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+            } else if (!data.scanning) {
+              statusEl.style.color = '#cbd5e1';
+              if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+            } else {
+              statusEl.style.color = '#00f3ff';
+            }
+          }
+        })
+        .catch(() => {});
     };
 
     const setDrive = (dir) => {
@@ -1190,6 +1262,74 @@ serial.write("C\n") # Auto-Center Steering</pre>
         stopSteer();
       }
     });
+
+    // Native HTML5 Browser Gamepad Support (Bluetooth/USB Controllers on Phone/PC)
+    let gpDriveState = 'stop';
+    let gpSteerState = 'idle';
+
+    window.addEventListener("gamepadconnected", (e) => {
+      const statusEl = document.getElementById('pairStatus');
+      statusEl.innerText = '🎮 CONTROLLER CONNECTED VIA PHONE/BROWSER: ' + e.gamepad.id;
+      statusEl.style.color = '#00ff88';
+    });
+
+    const pollBrowserGamepad = () => {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (let gp of gamepads) {
+        if (!gp) continue;
+        const stickY = gp.axes.length > 1 ? gp.axes[1] : 0;
+        const stickX = gp.axes.length > 0 ? gp.axes[0] : 0;
+
+        const btnA = gp.buttons[0] && gp.buttons[0].pressed;
+        const btnB = gp.buttons[1] && gp.buttons[1].pressed;
+        const btnX = gp.buttons[2] && gp.buttons[2].pressed;
+        const dUp = gp.buttons[12] && gp.buttons[12].pressed;
+        const dDown = gp.buttons[13] && gp.buttons[13].pressed;
+        const dLeft = gp.buttons[14] && gp.buttons[14].pressed;
+        const dRight = gp.buttons[15] && gp.buttons[15].pressed;
+
+        // Drive (Forward / Back / Stop)
+        if (dUp || btnA || stickY < -0.35) {
+          if (gpDriveState !== 'forward') {
+            setDrive('forward');
+            gpDriveState = 'forward';
+          }
+        } else if (dDown || stickY > 0.35) {
+          if (gpDriveState !== 'back') {
+            setDrive('back');
+            gpDriveState = 'back';
+          }
+        } else if (btnB || btnX) {
+          if (gpDriveState !== 'stop') {
+            triggerStop();
+            gpDriveState = 'stop';
+          }
+        } else if (gpDriveState !== 'stop' && Math.abs(stickY) < 0.2 && !dUp && !dDown) {
+          sendCommand('stop_drive');
+          btnGo.classList.remove('active');
+          btnBack.classList.remove('active');
+          gpDriveState = 'stop';
+        }
+
+        // Steer (Left / Right / Idle)
+        if (dLeft || stickX < -0.35) {
+          if (gpSteerState !== 'left') {
+            startSteer('left');
+            gpSteerState = 'left';
+          }
+        } else if (dRight || stickX > 0.35) {
+          if (gpSteerState !== 'right') {
+            startSteer('right');
+            gpSteerState = 'right';
+          }
+        } else if (gpSteerState !== 'idle' && Math.abs(stickX) < 0.2 && !dLeft && !dRight) {
+          stopSteer();
+          gpSteerState = 'idle';
+        }
+      }
+      requestAnimationFrame(pollBrowserGamepad);
+    };
+    requestAnimationFrame(pollBrowserGamepad);
 
     document.addEventListener('contextmenu', event => event.preventDefault());
   </script>
@@ -1452,6 +1592,16 @@ void setup() {
     server.send(200, "text/plain", "BLE Scan Started for Wireless Controllers!");
   });
 
+  server.on("/ble_status", []() {
+    lastHeartbeatMs = millis();
+    String json = "{";
+    json += "\"scanning\":" + String(isBleScanning ? "true" : "false") + ",";
+    json += "\"status\":\"" + bleStatusMsg + "\",";
+    json += "\"connected\":\"" + connectedGamepadName + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
+  });
+
   server.on("/stop", []() { processCommand("stop"); server.send(200, "text/plain", "Stopped"); });
   server.on("/stop_drive", []() { processCommand("stop_drive"); server.send(200, "text/plain", "Stopped Drive"); });
   server.on("/stop_steer", []() { processCommand("stop_steer"); server.send(200, "text/plain", "Stopped Steer"); });
@@ -1473,6 +1623,9 @@ void setup() {
 void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
+
+  // Safe Asynchronous Gamepad Pairing
+  handleGamepadConnectionLoop();
 
   // Real-time Racing Simulator Dynamic Soundscape (Idle, Shifting, Drifting)
   updateSimulatorAudio();
