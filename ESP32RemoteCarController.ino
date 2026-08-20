@@ -546,6 +546,59 @@ const char* htmlPage = R"HTML(
       border-color: #00f3ff;
     }
 
+    /* Live GPIO Pin Diagnostics Grid */
+    .pin-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      width: 100%;
+      margin-top: 6px;
+    }
+    .pin-card {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      transition: all 0.2s ease;
+    }
+    .pin-card.active-low {
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.15);
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
+    }
+    .pin-header {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 10px;
+      font-weight: 700;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .pin-state-badge {
+      font-size: 9px;
+      font-weight: 900;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #334155;
+      color: #cbd5e1;
+    }
+    .pin-card.active-low .pin-state-badge {
+      background: #22c55e;
+      color: #052e16;
+    }
+    .pin-expected {
+      font-size: 9px;
+      color: #64748b;
+      font-family: monospace;
+    }
+    .pin-card.active-low .pin-expected {
+      color: #86efac;
+    }
+
     /* Documentation & Guide Tab Cards */
     .doc-card {
       background: rgba(15, 23, 42, 0.9);
@@ -689,14 +742,64 @@ const char* htmlPage = R"HTML(
     </div>
 
     <!-- Generic Wireless Gamepad Pairing Button -->
-    <div style="display:flex; gap:8px; width:100%; margin-top:10px;">
-      <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:12px 0;">
+    <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
+      <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0;">
         🎮 PAIR WIRELESS CONTROLLER
       </button>
     </div>
 
-    <div id="pairStatus" style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:'Orbitron',sans-serif; text-align:center;">
+    <div id="pairStatus" style="font-size:10px; color:#94a3b8; margin-top:4px; font-family:'Orbitron',sans-serif; text-align:center;">
       PUT WIRELESS CONTROLLER IN PAIRING MODE, THEN TAP ABOVE!
+    </div>
+
+    <!-- LIVE GPIO PIN DIAGNOSTICS HUD -->
+    <div style="width:100%; margin-top:12px;">
+      <div style="font-family:'Orbitron',sans-serif; font-size:11px; color:#00f3ff; font-weight:700; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
+        <span>⚡ LIVE GPIO SIGNAL MONITOR</span>
+        <span style="font-size:9px; color:#64748b;">MULTIMETER DIAGNOSTICS</span>
+      </div>
+
+      <div class="pin-grid">
+        <!-- GPIO 4: Forward -->
+        <div class="pin-card" id="cardPin4">
+          <div class="pin-header">
+            <span>GPIO 4 [IN1]</span>
+            <span class="pin-state-badge" id="badgePin4">Hi-Z (OFF)</span>
+          </div>
+          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Forward Drive</div>
+          <div class="pin-expected" id="expPin4">Volt: ~3.3V-5V (Floating)</div>
+        </div>
+
+        <!-- GPIO 5: Reverse -->
+        <div class="pin-card" id="cardPin5">
+          <div class="pin-header">
+            <span>GPIO 5 [IN2]</span>
+            <span class="pin-state-badge" id="badgePin5">Hi-Z (OFF)</span>
+          </div>
+          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Reverse Drive</div>
+          <div class="pin-expected" id="expPin5">Volt: ~3.3V-5V (Floating)</div>
+        </div>
+
+        <!-- GPIO 6: Steer Left -->
+        <div class="pin-card" id="cardPin6">
+          <div class="pin-header">
+            <span>GPIO 6 [IN3]</span>
+            <span class="pin-state-badge" id="badgePin6">Hi-Z (OFF)</span>
+          </div>
+          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Left</div>
+          <div class="pin-expected" id="expPin6">Volt: ~3.3V-5V (Floating)</div>
+        </div>
+
+        <!-- GPIO 7: Steer Right -->
+        <div class="pin-card" id="cardPin7">
+          <div class="pin-header">
+            <span>GPIO 7 [IN4]</span>
+            <span class="pin-state-badge" id="badgePin7">Hi-Z (OFF)</span>
+          </div>
+          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Right</div>
+          <div class="pin-expected" id="expPin7">Volt: ~3.3V-5V (Floating)</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -788,7 +891,7 @@ serial.write("C\n") # Auto-Center Steering</pre>
   <!-- Telemetry Status -->
   <div class="telemetry">
     <span class="status-dot"></span>
-    <span>SYSTEM ONLINE // OPEN-DRAIN RELAY DRIVER READY</span>
+    <span>SYSTEM ONLINE // LIVE MULTIMETER PIN MONITOR ACTIVE</span>
   </div>
 
   <script>
@@ -803,14 +906,37 @@ serial.write("C\n") # Auto-Center Steering</pre>
       btn.classList.add('active');
     };
 
+    const updatePinHud = (pinNum, isOn) => {
+      const card = document.getElementById('cardPin' + pinNum);
+      const badge = document.getElementById('badgePin' + pinNum);
+      const exp = document.getElementById('expPin' + pinNum);
+      if (isOn) {
+        card.classList.add('active-low');
+        badge.innerText = '0.0V (LOW)';
+        exp.innerText = 'Signal: 0V SINK (ENGAGED)';
+      } else {
+        card.classList.remove('active-low');
+        badge.innerText = 'Hi-Z (OFF)';
+        exp.innerText = 'Volt: ~3.3V-5V (Floating)';
+      }
+    };
+
     const sendCommand = (cmd) => {
       fetch('/' + cmd).catch(e => console.error(e));
     };
 
-    // Heartbeat to keep failsafe active
+    // Heartbeat & Live Pin Status Poll
     setInterval(() => {
-      fetch('/heartbeat').catch(() => {});
-    }, 1000);
+      fetch('/status')
+        .then(r => r.json())
+        .then(d => {
+          updatePinHud(4, d.pin4 === 'ON');
+          updatePinHud(5, d.pin5 === 'ON');
+          updatePinHud(6, d.pin6 === 'ON');
+          updatePinHud(7, d.pin7 === 'ON');
+        })
+        .catch(() => {});
+    }, 400);
 
     const triggerBleScan = () => {
       const statusEl = document.getElementById('pairStatus');
@@ -1150,10 +1276,16 @@ void setup() {
   server.on("/", sendHtmlWithNoCache);
   server.on("/wiring", sendHtmlWithNoCache);
   server.on("/mrl", sendHtmlWithNoCache);
-  
-  server.on("/heartbeat", []() {
+
+  server.on("/status", []() {
     lastHeartbeatMs = millis();
-    server.send(200, "text/plain", "OK");
+    String json = "{";
+    json += "\"pin4\":\"" + String(currentDriveState == DRIVE_FORWARD ? "ON" : "OFF") + "\",";
+    json += "\"pin5\":\"" + String(currentDriveState == DRIVE_BACK ? "ON" : "OFF") + "\",";
+    json += "\"pin6\":\"" + String(currentSteerState == STEER_LEFT ? "ON" : "OFF") + "\",";
+    json += "\"pin7\":\"" + String(currentSteerState == STEER_RIGHT ? "ON" : "OFF") + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
   });
 
   server.on("/scan_ble", []() {
