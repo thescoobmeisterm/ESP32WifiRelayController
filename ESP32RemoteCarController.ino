@@ -1229,7 +1229,17 @@ void sendHtmlWithNoCache() {
 void setup() {
   Serial.begin(115200);
   
-  // Initialize all relay pins to High-Impedance Pullup DISENGAGED mode
+  // 1. Initialize WiFi Access Point IMMEDIATELY (Priority #1)
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
+  Serial.println("Starting TinkDrive Access Point...");
+  Serial.print("AP IP Address: ");
+  Serial.println(WiFi.softAPIP()); 
+  
+  // Start DNS Server for Captive Portal
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+
+  // 2. Initialize all relay pins to High-Impedance Pullup DISENGAGED mode
   setRelayOff(pinForward);
   setRelayOff(pinBack);
   setRelayOff(pinLeft);
@@ -1237,11 +1247,11 @@ void setup() {
   
   stopAll();
 
-  // Initialize MAX98357A I2S Digital Audio
+  // 3. Initialize MAX98357A I2S Digital Audio
   initI2SAudio();
   playBootChime();
 
-  // Initialize BLE Device
+  // 4. Initialize BLE Device
   BLEDevice::init("TINK_Base_Platform");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -1267,16 +1277,6 @@ void setup() {
   pService->start();
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
-
-  // Start WiFi Access Point
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
-  Serial.println("Starting AP...");
-  Serial.print("AP IP Address: ");
-  Serial.println(WiFi.softAPIP()); 
-  
-  // Start DNS Server for Captive Portal
-  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
   
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
