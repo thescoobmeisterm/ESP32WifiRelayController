@@ -24,15 +24,15 @@ const int pinRight   = 7;  // IN4 Relay
 #define I2S_LRC_PIN     16 // Left/Right Word Select Clock
 #define I2S_DIN_PIN     18 // Digital Data Input
 
-// Open-Drain / Pullup Relay Control Helpers
-// Solves 5V active-low optocoupler 3.3V leakage keeping relays permanently engaged!
+// Standard Active-Low Relay Control Helpers
 void setRelayOn(int pin) {
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, LOW); // Pull to GND -> Full voltage across optocoupler LED -> Relay ENGAGED!
+  digitalWrite(pin, LOW);  // 0V (GND) -> Optocoupler conducts -> Relay ENGAGED!
 }
 
 void setRelayOff(int pin) {
-  pinMode(pin, INPUT_PULLUP); // High-Impedance Pullup -> Pulls pin to 3.3V, stops current leakage, disengages relay safely!
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, HIGH); // HIGH (3.3V) -> 0V across optocoupler -> Relay DISENGAGED!
 }
 
 // Onboard RGB LED helper (ESP32-S3 built-in WS2812 LED)
