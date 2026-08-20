@@ -171,76 +171,155 @@ void playI2STone(uint32_t freq, uint32_t durationMs) {
   }
 }
 
-// Retro Arcade Video Game Engine Synthesizer (Accelerating & Shifting)
-unsigned long forwardStartTime = 0;
-double enginePhase = 0;
-unsigned long lastEngineChunkMs = 0;
+// --- Racing Simulator Dynamic Sound Synthesizer ---
+unsigned long lastAudioSliceMs = 0;
+double simEnginePhase = 0;
+double simDriftPhase = 0;
+unsigned long forwardCycleStartMs = 0;
+bool wasConnectedAudio = false;
 
-void updateEngineAudio() {
-  if (!isI2SReady || currentDriveState != DRIVE_FORWARD) {
-    return;
-  }
-  
-  unsigned long now = millis();
-  // Stream continuous 25ms audio chunks
-  if (now - lastEngineChunkMs < 25) {
-    return;
-  }
-  lastEngineChunkMs = now;
+// Ignition Engine Starter Sound (Crank-crank-crank-VROOOOM!)
+void playIgnitionSound() {
+  if (!isI2SReady) return;
+  // Starter motor cranking chirps
+  playI2STone(115, 80); delay(35);
+  playI2STone(110, 80); delay(35);
+  playI2STone(105, 90); delay(30);
 
-  unsigned long elapsed = now - forwardStartTime;
-  double engineFreq = 80.0;
-
-  // 3-Gear Arcade Acceleration & Shifting Curve
-  if (elapsed < 1300) {
-    // 1st Gear: Revs from 75 Hz to 225 Hz
-    double progress = (double)elapsed / 1300.0;
-    engineFreq = 75.0 + (progress * progress * (225.0 - 75.0));
-  } 
-  else if (elapsed < 1380) {
-    // Shift 1 -> 2: Clutch drop
-    engineFreq = 120.0;
-  } 
-  else if (elapsed < 3000) {
-    // 2nd Gear: Accelerates from 135 Hz to 340 Hz
-    double progress = (double)(elapsed - 1380) / (3000.0 - 1380.0);
-    engineFreq = 135.0 + (progress * (340.0 - 135.0));
-  } 
-  else if (elapsed < 3080) {
-    // Shift 2 -> 3: Clutch drop
-    engineFreq = 210.0;
-  } 
-  else {
-    // 3rd Gear & High-RPM Racing Cruise: 230 Hz to 430 Hz + Throttle Vibrato
-    double progress = min(1.0, (double)(elapsed - 3080) / 2000.0);
-    double vibrato = sin((double)now * 0.025) * 9.0;
-    engineFreq = 230.0 + (progress * 190.0) + vibrato;
-  }
-
-  // Generate 25ms slice of rich harmonic arcade combustion audio (44.1kHz)
+  // Engine Catch & Roaring Rev
   int sampleRate = 44100;
-  int numSamples = (sampleRate * 25) / 1000;
-  int16_t samples[128]; // 64 stereo samples per sub-frame
-
-  double phaseInc = (2.0 * M_PI * engineFreq) / sampleRate;
+  int numSamples = (sampleRate * 450) / 1000; // 450ms rev
+  int16_t samples[128];
+  double phase = 0;
   size_t bytesWritten;
 
   for (int i = 0; i < numSamples; i += 64) {
     int count = min(64, numSamples - i);
+    double prog = (double)i / (double)numSamples;
+    double freq = (prog < 0.55) ? (130.0 + (prog / 0.55) * (480.0 - 130.0))
+                                : (480.0 - ((prog - 0.55) / 0.45) * (480.0 - 90.0));
+    double phaseInc = (2.0 * M_PI * freq) / sampleRate;
+
     for (int j = 0; j < count; j++) {
-      // 8-bit style harmonic engine waveform (Fundamental + 2nd & 3rd harmonics + sub-rumble)
       int16_t sampleVal = (int16_t)(
-        (sin(enginePhase) * 5500.0) + 
-        (sin(enginePhase * 2.0) * 2800.0) + 
-        (sin(enginePhase * 0.5) * 2200.0) + 
-        (sin(enginePhase * 3.0) * 1200.0)
+        (sin(phase) * 6500.0) +
+        (sin(phase * 2.0) * 3200.0) +
+        (sin(phase * 0.5) * 2200.0)
       );
-      samples[j * 2] = sampleVal;     // Left
-      samples[j * 2 + 1] = sampleVal; // Right
-      enginePhase += phaseInc;
-      if (enginePhase >= 2.0 * M_PI) enginePhase -= 2.0 * M_PI;
+      samples[j * 2] = sampleVal;
+      samples[j * 2 + 1] = sampleVal;
+      phase += phaseInc;
+      if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
     }
-    i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+    i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(15));
+  }
+}
+
+void updateSimulatorAudio() {
+  if (!isI2SReady) return;
+
+  // Check for device connection event to play Ignition Start sound
+  bool nowConnected = isDeviceConnected();
+  if (nowConnected && !wasConnectedAudio) {
+    wasConnectedAudio = true;
+    playIgnitionSound();
+    return;
+  }
+  if (!nowConnected) {
+    wasConnectedAudio = false;
+  }
+
+  unsigned long now = millis();
+  if (now - lastAudioSliceMs < 25) return;
+  lastAudioSliceMs = now;
+
+  int sampleRate = 44100;
+  int numSamples = (sampleRate * 25) / 1000; // 25ms slice
+  int16_t samples[128];
+  size_t bytesWritten;
+
+  // 1. TIRE DRIFT SQUEAL (Steering Left or Right)
+  if (currentSteerState == STEER_LEFT || currentSteerState == STEER_RIGHT) {
+    for (int i = 0; i < numSamples; i += 64) {
+      int count = min(64, numSamples - i);
+      double squealFreq = 2600.0 + (sin((double)now * 0.04 + (double)i * 0.008) * 350.0) + ((rand() % 220) - 110);
+      double phaseInc = (2.0 * M_PI * squealFreq) / sampleRate;
+
+      for (int j = 0; j < count; j++) {
+        int16_t noise = (rand() % 1600) - 800;
+        int16_t sampleVal = (int16_t)((sin(simDriftPhase) * 4500.0) + (sin(simDriftPhase * 1.45) * 2200.0) + noise);
+        samples[j * 2] = sampleVal;
+        samples[j * 2 + 1] = sampleVal;
+        simDriftPhase += phaseInc;
+        if (simDriftPhase >= 2.0 * M_PI) simDriftPhase -= 2.0 * M_PI;
+      }
+      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+    }
+    return;
+  }
+
+  // 2. CONTINUOUS CYCLIC SHIFTING GEARBOX (Forward Driving)
+  if (currentDriveState == DRIVE_FORWARD) {
+    unsigned long cycleElapsed = (now - forwardCycleStartMs) % 1500; // 1.5s per gear cycle
+    int gearNum = ((now - forwardCycleStartMs) / 1500) % 5;          // Gears 1 through 5 loop
+
+    double baseGearFreq = 95.0 + (gearNum * 22.0);
+    double maxGearFreq  = 310.0 + (gearNum * 28.0);
+    double engineFreq;
+
+    if (cycleElapsed < 1320) {
+      // Accelerating climb in current gear
+      double prog = (double)cycleElapsed / 1320.0;
+      engineFreq = baseGearFreq + (prog * prog * (maxGearFreq - baseGearFreq));
+    } else {
+      // Gear shift clutch dip drop
+      double dropProg = (double)(cycleElapsed - 1320) / 180.0;
+      engineFreq = maxGearFreq - (dropProg * (maxGearFreq - (baseGearFreq + 22.0)));
+    }
+
+    double phaseInc = (2.0 * M_PI * engineFreq) / sampleRate;
+
+    for (int i = 0; i < numSamples; i += 64) {
+      int count = min(64, numSamples - i);
+      for (int j = 0; j < count; j++) {
+        int16_t sampleVal = (int16_t)(
+          (sin(simEnginePhase) * 5800.0) +
+          (sin(simEnginePhase * 2.0) * 2900.0) +
+          (sin(simEnginePhase * 0.5) * 2200.0) +
+          (sin(simEnginePhase * 3.0) * 1200.0)
+        );
+        samples[j * 2] = sampleVal;
+        samples[j * 2 + 1] = sampleVal;
+        simEnginePhase += phaseInc;
+        if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+      }
+      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+    }
+    return;
+  }
+
+  // 3. V8 CAM-IDLE THROBBING RUMBLE (When Connected & Neutral/Idle)
+  if (isDeviceConnected() && currentDriveState == DRIVE_STOP && !isCentering) {
+    double idleMod = 0.75 + (sin((double)now * 0.02) * 0.25);
+    double idleFreq = 42.0 + (sin((double)now * 0.008) * 3.0);
+    double phaseInc = (2.0 * M_PI * idleFreq) / sampleRate;
+
+    for (int i = 0; i < numSamples; i += 64) {
+      int count = min(64, numSamples - i);
+      for (int j = 0; j < count; j++) {
+        int16_t sampleVal = (int16_t)(
+          ((sin(simEnginePhase) * 4800.0) +
+           (sin(simEnginePhase * 2.0) * 2300.0) +
+           (sin(simEnginePhase * 3.0) * 1100.0)) * idleMod
+        );
+        samples[j * 2] = sampleVal;
+        samples[j * 2 + 1] = sampleVal;
+        simEnginePhase += phaseInc;
+        if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+      }
+      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+    }
+    return;
   }
 }
 
@@ -1153,9 +1232,7 @@ void stopAll() {
 }
 
 void playBootChime() {
-  playI2STone(440, 80); delay(40);
-  playI2STone(880, 80); delay(40);
-  playI2STone(1760, 150); delay(50);
+  playIgnitionSound();
 }
 
 void playSuccessChime() {
@@ -1186,8 +1263,7 @@ void processCommand(String cmd) {
     stopDriving(); delay(50);
     setRelayOn(pinForward);
     currentDriveState = DRIVE_FORWARD;
-    forwardStartTime = millis();
-    lastEngineChunkMs = 0;
+    forwardCycleStartMs = millis();
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
     stopDriving(); delay(50);
@@ -1201,7 +1277,6 @@ void processCommand(String cmd) {
       currentSteerState = STEER_LEFT;
       lastSteerUpdateMs = millis();
       setRelayOn(pinLeft);
-      playI2STone(650, 80);
     }
   }
   else if (cmd == "right" || cmd == "R" || cmd == "r" || cmd == "D" || cmd == "d") {
@@ -1211,7 +1286,6 @@ void processCommand(String cmd) {
       currentSteerState = STEER_RIGHT;
       lastSteerUpdateMs = millis();
       setRelayOn(pinRight);
-      playI2STone(750, 80);
     }
   }
   else if (cmd == "stop_steer" || cmd == "t") {
@@ -1400,8 +1474,8 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
 
-  // Real-time Retro Arcade Engine Audio (Accelerating & Shifting)
-  updateEngineAudio();
+  // Real-time Racing Simulator Dynamic Soundscape (Idle, Shifting, Drifting)
+  updateSimulatorAudio();
 
   // Handle Hardware USB Serial input (MyRobotLab Serial Service)
   if (Serial.available()) {
