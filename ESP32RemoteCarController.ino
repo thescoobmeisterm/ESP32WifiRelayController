@@ -6,6 +6,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEScan.h>
+#include <Preferences.h>
 #include "driver/i2s.h"
 
 // AP Credentials
@@ -381,10 +382,26 @@ void gamepadNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, ui
   }
 }
 
+Preferences prefs;
+String savedGamepadMac = "";
 BLEAdvertisedDevice* targetGamepadDevice = nullptr;
 bool doConnectGamepad = false;
-String bleStatusMsg = "Ready to scan for controllers";
+String bleStatusMsg = "Searching for controller...";
 String connectedGamepadName = "";
+unsigned long lastAutoScanMs = 0;
+
+class GamepadClientCallbacks : public BLEClientCallbacks {
+  void onConnect(BLEClient* pclient) {
+    Serial.println("Gamepad Client Connected Callback");
+  }
+  void onDisconnect(BLEClient* pclient) {
+    Serial.println(">>> WIRELESS GAMEPAD DISCONNECTED!");
+    deviceConnected = false;
+    connectedGamepadName = "";
+    bleStatusMsg = "Gamepad disconnected. Auto-searching...";
+    stopAll();
+  }
+};
 
 // BLE Central Scanner Callbacks for discovering ANY Wireless Gamepad
 class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
@@ -420,10 +437,19 @@ class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
                        name.indexOf("STK-") != -1 ||
                        name.indexOf("PG-") != -1;
 
-      if (isGamepad && !doConnectGamepad) {
-        String displayName = name.length() > 0 ? name : ("Device " + addr);
-        Serial.println(">>> MATCHED BLE GAMEPAD (" + displayName + ")! PREPARING CONNECTION...");
-        bleStatusMsg = "Found: " + displayName + " - Connecting...";
+      // Priority 1: Match saved controller MAC!
+      bool isMatch = false;
+      if (savedGamepadMac.length() > 0 && addr.equalsIgnoreCase(savedGamepadMac)) {
+        isMatch = true;
+        Serial.println(">>> MATCHED PREVIOUSLY SAVED GAMEPAD MAC: " + addr);
+      } else if (isGamepad) {
+        isMatch = true;
+      }
+
+      if (isMatch && !doConnectGamepad) {
+        String displayName = name.length() > 0 ? name : ("Controller " + addr);
+        Serial.println(">>> AUTO-CONNECTING TO GAMEPAD (" + displayName + ")...");
+        bleStatusMsg = "Connecting to " + displayName + "...";
         
         targetGamepadDevice = new BLEAdvertisedDevice(advertisedDevice);
         doConnectGamepad = true;
@@ -434,58 +460,83 @@ class GamepadAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 };
 
 void onScanComplete(BLEScanResults results) {
-  Serial.println("Async BLE Scan Complete!");
   isBleScanning = false;
   if (!doConnectGamepad && connectedGamepadName.length() == 0) {
-    bleStatusMsg = "Scan complete: No controllers found. Put controller in pairing mode & retry!";
+    if (savedGamepadMac.length() > 0) {
+      bleStatusMsg = "Auto-searching for paired controller (" + savedGamepadMac + ")...";
+    } else {
+      bleStatusMsg = "Put controller in pairing mode (auto-scanning)...";
+    }
   }
 }
 
 void startBleGamepadScan() {
-  if (isBleScanning) return;
-  Serial.println("Starting Async BLE Gamepad Scan for Wireless Controllers...");
+  if (isBleScanning || doConnectGamepad) return;
+  if (pGamepadClient != nullptr && pGamepadClient->isConnected()) return;
+
   isBleScanning = true;
-  bleStatusMsg = "🔍 Scanning for wireless controllers (10s)...";
   BLEScan* pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new GamepadAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
-  pBLEScan->start(10, onScanComplete, false); // ASYNC NON-BLOCKING SCAN!
+  pBLEScan->start(3, onScanComplete, false); // Quick 3-second non-blocking auto-scan
 }
 
 void handleGamepadConnectionLoop() {
-  if (!doConnectGamepad || targetGamepadDevice == nullptr) return;
-  
-  String devName = targetGamepadDevice->getName().c_str();
-  if (devName.length() == 0) devName = targetGamepadDevice->getAddress().toString().c_str();
-  
-  Serial.println("Connecting to BLE Gamepad: " + devName);
-  pGamepadClient = BLEDevice::createClient();
-  
-  if (pGamepadClient->connect(targetGamepadDevice)) {
-    Serial.println(">>> CONNECTED TO WIRELESS GAMEPAD: " + devName);
-    deviceConnected = true;
-    connectedGamepadName = devName;
-    bleStatusMsg = "CONNECTED TO " + devName + "!";
-    playSuccessChime();
-
-    // Discover HID Service
-    BLERemoteService* pRemoteService = pGamepadClient->getService(BLEUUID((uint16_t)0x1812));
-    if (pRemoteService != nullptr) {
-      BLERemoteCharacteristic* pChar = pRemoteService->getCharacteristic(BLEUUID((uint16_t)0x2A4D));
-      if (pChar != nullptr && pChar->canNotify()) {
-        pChar->registerForNotify(gamepadNotifyCallback);
-      }
+  // 1. Process pending connection
+  if (doConnectGamepad && targetGamepadDevice != nullptr) {
+    String devName = targetGamepadDevice->getName().c_str();
+    String devAddr = targetGamepadDevice->getAddress().toString().c_str();
+    if (devName.length() == 0) devName = "Wireless Controller";
+    
+    Serial.println("Connecting to BLE Gamepad: " + devName + " [" + devAddr + "]");
+    if (pGamepadClient == nullptr) {
+      pGamepadClient = BLEDevice::createClient();
+      pGamepadClient->setClientCallbacks(new GamepadClientCallbacks());
     }
-  } else {
-    Serial.println("Failed to connect to BLE Gamepad.");
-    bleStatusMsg = "Connection failed to " + devName + ". Please retry pairing!";
+    
+    if (pGamepadClient->connect(targetGamepadDevice)) {
+      Serial.println(">>> PERMANENTLY CONNECTED TO WIRELESS GAMEPAD: " + devName);
+      deviceConnected = true;
+      connectedGamepadName = devName;
+      bleStatusMsg = "CONNECTED: " + devName;
+      playSuccessChime();
+
+      // Persist Gamepad MAC in Non-Volatile Flash Memory!
+      prefs.begin("tink_gp", false);
+      prefs.putString("mac", devAddr);
+      prefs.putString("name", devName);
+      prefs.end();
+      savedGamepadMac = devAddr;
+      Serial.println("Saved Gamepad to Flash Memory: " + devAddr);
+
+      // Discover HID Service & register notifications
+      BLERemoteService* pRemoteService = pGamepadClient->getService(BLEUUID((uint16_t)0x1812));
+      if (pRemoteService != nullptr) {
+        BLERemoteCharacteristic* pChar = pRemoteService->getCharacteristic(BLEUUID((uint16_t)0x2A4D));
+        if (pChar != nullptr && pChar->canNotify()) {
+          pChar->registerForNotify(gamepadNotifyCallback);
+        }
+      }
+    } else {
+      Serial.println("Failed to connect to BLE Gamepad.");
+      bleStatusMsg = "Connection attempt failed. Auto-retrying...";
+    }
+    
+    doConnectGamepad = false;
+    delete targetGamepadDevice;
+    targetGamepadDevice = nullptr;
+    return;
   }
-  
-  doConnectGamepad = false;
-  delete targetGamepadDevice;
-  targetGamepadDevice = nullptr;
+
+  // 2. Standalone Background Auto-Reconnect: Scan automatically if no controller is connected!
+  if (pGamepadClient == nullptr || !pGamepadClient->isConnected()) {
+    if (millis() - lastAutoScanMs > 4000 && !isBleScanning) {
+      lastAutoScanMs = millis();
+      startBleGamepadScan();
+    }
+  }
 }
 
 const char* htmlPage = R"HTML(
@@ -946,15 +997,18 @@ const char* htmlPage = R"HTML(
       <button class="btn-util" onclick="sendCommand('set_center')">Set Center (Z)</button>
     </div>
 
-    <!-- Generic Wireless Gamepad Pairing Button -->
+    <!-- Wireless Gamepad Pairing & Auto-Connect Bar -->
     <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
-      <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0;">
-        🎮 PAIR WIRELESS CONTROLLER
+      <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0; flex:1;">
+        🎮 PAIR CONTROLLER
+      </button>
+      <button class="btn-util" onclick="forgetGamepad()" style="border-color:#ef4444; color:#ef4444; font-weight:bold; padding:10px 0; max-width:90px;">
+        FORGET
       </button>
     </div>
 
     <div id="pairStatus" style="font-size:10px; color:#94a3b8; margin-top:4px; font-family:'Orbitron',sans-serif; text-align:center;">
-      PUT WIRELESS CONTROLLER IN PAIRING MODE, THEN TAP ABOVE!
+      STANDALONE AUTO-RECONNECT ACTIVE: TURN ON CONTROLLER TO DRIVE!
     </div>
 
     <!-- LIVE GPIO PIN DIAGNOSTICS HUD -->
@@ -1186,6 +1240,16 @@ serial.write("C\n") # Auto-Center Steering</pre>
           }
         })
         .catch(() => {});
+    };
+
+    const forgetGamepad = () => {
+      fetch('/forget_gamepad')
+        .then(r => r.text())
+        .then(() => {
+          const statusEl = document.getElementById('pairStatus');
+          statusEl.innerText = 'CONTROLLER FORGOTTEN. PUT NEW CONTROLLER IN PAIRING MODE!';
+          statusEl.style.color = '#f59e0b';
+        });
     };
 
     const setDrive = (dir) => {
@@ -1602,6 +1666,19 @@ void setup() {
     server.send(200, "application/json", json);
   });
 
+  server.on("/forget_gamepad", []() {
+    prefs.begin("tink_gp", false);
+    prefs.clear();
+    prefs.end();
+    savedGamepadMac = "";
+    connectedGamepadName = "";
+    if (pGamepadClient != nullptr && pGamepadClient->isConnected()) {
+      pGamepadClient->disconnect();
+    }
+    bleStatusMsg = "Controller forgotten. Ready to pair a new controller.";
+    server.send(200, "text/plain", "Controller Forgotten");
+  });
+
   server.on("/stop", []() { processCommand("stop"); server.send(200, "text/plain", "Stopped"); });
   server.on("/stop_drive", []() { processCommand("stop_drive"); server.send(200, "text/plain", "Stopped Drive"); });
   server.on("/stop_steer", []() { processCommand("stop_steer"); server.send(200, "text/plain", "Stopped Steer"); });
@@ -1618,6 +1695,18 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
   lastHeartbeatMs = millis();
+
+  // 5. Load Saved Controller MAC from Flash & Trigger Immediate Auto-Connect
+  prefs.begin("tink_gp", true);
+  savedGamepadMac = prefs.getString("mac", "");
+  String savedName = prefs.getString("name", "");
+  prefs.end();
+
+  if (savedGamepadMac.length() > 0) {
+    Serial.println("Found Saved Gamepad in Flash Memory: " + savedName + " [" + savedGamepadMac + "]");
+    bleStatusMsg = "Auto-searching for saved controller: " + (savedName.length() > 0 ? savedName : savedGamepadMac);
+  }
+  startBleGamepadScan();
 }
 
 void loop() {
