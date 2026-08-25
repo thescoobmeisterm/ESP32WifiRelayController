@@ -151,8 +151,19 @@ void initI2SAudio() {
   isI2SReady = true;
 }
 
+int audioVolumePercent = 100; // 0% to 100% full scale
+bool audioMuted = false;
+
+inline float getVolumeFactor() {
+  if (audioMuted || audioVolumePercent <= 0) return 0.0f;
+  return (float)audioVolumePercent / 100.0f;
+}
+
 void playI2STone(uint32_t freq, uint32_t durationMs) {
   if (!isI2SReady) return;
+  float vol = getVolumeFactor();
+  if (vol <= 0.001f) return;
+
   int sampleRate = 44100;
   int numSamples = (sampleRate * durationMs) / 1000;
   int16_t samples[128];
@@ -164,7 +175,8 @@ void playI2STone(uint32_t freq, uint32_t durationMs) {
   for (int i = 0; i < numSamples; i += 64) {
     int count = min(64, numSamples - i);
     for (int j = 0; j < count; j++) {
-      int16_t sampleVal = (int16_t)(sin(phase) * 8000.0);
+      int32_t raw = (int32_t)(sin(phase) * 28000.0 * vol);
+      int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
       samples[j * 2] = sampleVal;     // Left
       samples[j * 2 + 1] = sampleVal; // Right
       phase += phaseInc;
@@ -185,6 +197,9 @@ bool wasConnectedAudio = false;
 // Ignition Engine Starter Sound (Crank-crank-crank-VROOOOM!)
 void playIgnitionSound() {
   if (!isI2SReady) return;
+  float vol = getVolumeFactor();
+  if (vol <= 0.001f) return;
+
   // Starter motor cranking chirps
   playI2STone(115, 80); delay(35);
   playI2STone(110, 80); delay(35);
@@ -205,11 +220,12 @@ void playIgnitionSound() {
     double phaseInc = (2.0 * M_PI * freq) / sampleRate;
 
     for (int j = 0; j < count; j++) {
-      int16_t sampleVal = (int16_t)(
-        (sin(phase) * 6500.0) +
-        (sin(phase * 2.0) * 3200.0) +
-        (sin(phase * 0.5) * 2200.0)
+      int32_t raw = (int32_t)(
+        ((sin(phase) * 20000.0) +
+         (sin(phase * 2.0) * 10000.0) +
+         (sin(phase * 0.5) * 6000.0)) * vol
       );
+      int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
       samples[j * 2] = sampleVal;
       samples[j * 2 + 1] = sampleVal;
       phase += phaseInc;
@@ -221,6 +237,7 @@ void playIgnitionSound() {
 
 void updateSimulatorAudio() {
   if (!isI2SReady) return;
+  float vol = getVolumeFactor();
 
   // Check for device connection event to play Ignition Start sound
   bool nowConnected = isDeviceConnected();
@@ -232,6 +249,8 @@ void updateSimulatorAudio() {
   if (!nowConnected) {
     wasConnectedAudio = false;
   }
+
+  if (vol <= 0.001f) return; // Muted -> 0 CPU sound overhead
 
   unsigned long now = millis();
   if (now - lastAudioSliceMs < 25) return;
@@ -250,8 +269,9 @@ void updateSimulatorAudio() {
       double phaseInc = (2.0 * M_PI * squealFreq) / sampleRate;
 
       for (int j = 0; j < count; j++) {
-        int16_t noise = (rand() % 1600) - 800;
-        int16_t sampleVal = (int16_t)((sin(simDriftPhase) * 4500.0) + (sin(simDriftPhase * 1.45) * 2200.0) + noise);
+        int16_t noise = (rand() % 4000) - 2000;
+        int32_t raw = (int32_t)(((sin(simDriftPhase) * 18000.0) + (sin(simDriftPhase * 1.45) * 9000.0) + noise) * vol);
+        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
         samples[j * 2] = sampleVal;
         samples[j * 2 + 1] = sampleVal;
         simDriftPhase += phaseInc;
@@ -286,12 +306,13 @@ void updateSimulatorAudio() {
     for (int i = 0; i < numSamples; i += 64) {
       int count = min(64, numSamples - i);
       for (int j = 0; j < count; j++) {
-        int16_t sampleVal = (int16_t)(
-          (sin(simEnginePhase) * 5800.0) +
-          (sin(simEnginePhase * 2.0) * 2900.0) +
-          (sin(simEnginePhase * 0.5) * 2200.0) +
-          (sin(simEnginePhase * 3.0) * 1200.0)
+        int32_t raw = (int32_t)(
+          ((sin(simEnginePhase) * 18000.0) +
+           (sin(simEnginePhase * 2.0) * 9000.0) +
+           (sin(simEnginePhase * 0.5) * 6000.0) +
+           (sin(simEnginePhase * 3.0) * 3500.0)) * vol
         );
+        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
         samples[j * 2] = sampleVal;
         samples[j * 2 + 1] = sampleVal;
         simEnginePhase += phaseInc;
@@ -311,11 +332,12 @@ void updateSimulatorAudio() {
     for (int i = 0; i < numSamples; i += 64) {
       int count = min(64, numSamples - i);
       for (int j = 0; j < count; j++) {
-        int16_t sampleVal = (int16_t)(
-          ((sin(simEnginePhase) * 4800.0) +
-           (sin(simEnginePhase * 2.0) * 2300.0) +
-           (sin(simEnginePhase * 3.0) * 1100.0)) * idleMod
+        int32_t raw = (int32_t)(
+          (((sin(simEnginePhase) * 17000.0) +
+            (sin(simEnginePhase * 2.0) * 8000.0) +
+            (sin(simEnginePhase * 3.0) * 4000.0)) * idleMod) * vol
         );
+        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
         samples[j * 2] = sampleVal;
         samples[j * 2 + 1] = sampleVal;
         simEnginePhase += phaseInc;
@@ -1138,6 +1160,20 @@ const char* htmlPage = R"HTML(
       </div>
     </div>
 
+    <!-- 3. AUDIO & SOUND VOLUME GOVERNOR -->
+    <div class="panel-card">
+      <div class="panel-title">
+        <span>🔊 AUDIO VOLUME & MUTE</span>
+        <span id="volLabel" style="color:#22c55e; font-size:12px; font-weight:900;">100% VOLUME</span>
+      </div>
+      <input type="range" id="volSlider" class="control-slider" min="0" max="100" value="100" oninput="onVolumeChange(this.value)">
+      <div style="display:flex; gap:6px; margin-top:6px;">
+        <button class="preset-btn" id="btnMute" onclick="toggleMuteAudio()" style="color:#ef4444; border-color:#ef4444;">🔇 MUTE</button>
+        <button class="preset-btn" onclick="setVolumePreset(50)">🔉 50%</button>
+        <button class="preset-btn active" id="btnVol100" onclick="setVolumePreset(100)">🔊 100% BOOST</button>
+      </div>
+    </div>
+
     <!-- Wireless Gamepad Pairing & Auto-Connect Bar -->
     <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
       <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0; flex:1;">
@@ -1222,15 +1258,18 @@ const char* htmlPage = R"HTML(
     </div>
 
     <div class="doc-card">
-      <h3>🔊 MAX98357A I2S DIGITAL AUDIO AMP WIRING</h3>
+      <h3>🔊 MAX98357A I2S AUDIO AMP WIRING & HARDWARE GAIN BOOST</h3>
       <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
         <b>MAX98357A Pinout to ESP32-S3:</b><br>
         • <b>DIN</b> ➔ <code>GPIO 18</code> (I2S Data)<br>
         • <b>BCLK</b> ➔ <code>GPIO 17</code> (I2S Bit Clock)<br>
         • <b>LRC</b> ➔ <code>GPIO 16</code> (I2S Word Select)<br>
-        • <b>VIN</b> ➔ <code>5V / VIN</code><br>
-        • <b>GND</b> ➔ <code>ESP32 GND</code><br>
-        • <b>GAIN / SD</b> ➔ Leave unconnected (default 12dB).
+        • <b>VIN</b> ➔ <code>5V / VIN</code> (Powering from 5V provides 3.2 Watts vs <1W on 3.3V!)<br>
+        • <b>GND</b> ➔ <code>ESP32 GND</code><br><br>
+        <b>🚀 Hardware Analog Volume Boost Settings (GAIN Pin):</b><br>
+        • <b>Default (Floating):</b> 9dB gain<br>
+        • <b>GAIN ➔ GND directly:</b> 12dB gain (+3dB louder)<br>
+        • <b>GAIN ➔ GND through 100kΩ resistor:</b> 15dB gain (+6dB MAXIMUM BOOST!)<br>
       </p>
     </div>
 
@@ -1390,6 +1429,36 @@ serial.write("C\n") # Auto-Center Steering</pre>
         });
     };
 
+    let isAudioMuted = false;
+
+    const onVolumeChange = (val) => {
+      isAudioMuted = false;
+      document.getElementById('volLabel').innerText = val + '% VOLUME';
+      document.getElementById('btnMute').classList.remove('active');
+      document.getElementById('btnVol100').classList.toggle('active', val == 100);
+      fetch('/set_volume?val=' + val);
+    };
+
+    const setVolumePreset = (val) => {
+      document.getElementById('volSlider').value = val;
+      onVolumeChange(val);
+    };
+
+    const toggleMuteAudio = () => {
+      fetch('/toggle_mute')
+        .then(r => r.json())
+        .then(d => {
+          isAudioMuted = d.muted;
+          if (isAudioMuted) {
+            document.getElementById('volLabel').innerText = '🔇 MUTED';
+            document.getElementById('btnMute').classList.add('active');
+          } else {
+            document.getElementById('volLabel').innerText = d.vol + '% VOLUME';
+            document.getElementById('btnMute').classList.remove('active');
+          }
+        });
+    };
+
     const fetchConfig = () => {
       fetch('/get_config')
         .then(r => r.json())
@@ -1408,6 +1477,12 @@ serial.write("C\n") # Auto-Center Steering</pre>
             document.getElementById('rightLimitSlider').value = cfg.steer_right;
             currentRightLimit = parseInt(cfg.steer_right);
             document.getElementById('rightLimitDisplay').innerText = 'RIGHT: +' + cfg.steer_right + 'ms';
+          }
+          if (cfg.vol !== undefined) {
+            document.getElementById('volSlider').value = cfg.vol;
+            document.getElementById('volLabel').innerText = cfg.mute ? '🔇 MUTED' : (cfg.vol + '% VOLUME');
+            document.getElementById('btnMute').classList.toggle('active', cfg.mute);
+            document.getElementById('btnVol100').classList.toggle('active', !cfg.mute && cfg.vol == 100);
           }
           if (cfg.pos !== undefined) {
             updateSteerMeter(cfg.pos);
@@ -1871,13 +1946,15 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
-  // 5. Load Persistent Speed & Steering Calibration Limits from Flash
+  // 5. Load Persistent Speed, Steering Calibration Limits, & Audio Volume from Flash
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
   steerLimitLeftMs = prefs.getLong("s_left", 600);
   steerLimitRightMs = prefs.getLong("s_right", 600);
+  audioVolumePercent = prefs.getInt("vol", 100);
+  audioMuted = prefs.getBool("mute", false);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, Vol=%d%%, Mute=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, audioVolumePercent, audioMuted);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -1905,6 +1982,28 @@ void setup() {
       Serial.printf("Drive Speed Updated: %d%%\n", driveSpeedPercent);
     }
     server.send(200, "application/json", "{\"speed\":" + String(driveSpeedPercent) + "}");
+  });
+
+  server.on("/set_volume", []() {
+    if (server.hasArg("val")) {
+      audioVolumePercent = constrain(server.arg("val").toInt(), 0, 100);
+      if (audioVolumePercent > 0) audioMuted = false;
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("vol", audioVolumePercent);
+      prefs.putBool("mute", audioMuted);
+      prefs.end();
+      Serial.printf("Audio Volume Updated: %d%% (Mute=%d)\n", audioVolumePercent, audioMuted);
+    }
+    server.send(200, "application/json", "{\"vol\":" + String(audioVolumePercent) + ",\"muted\":" + String(audioMuted ? "true" : "false") + "}");
+  });
+
+  server.on("/toggle_mute", []() {
+    audioMuted = !audioMuted;
+    prefs.begin("tink_cfg", false);
+    prefs.putBool("mute", audioMuted);
+    prefs.end();
+    Serial.printf("Audio Mute Toggled: %d\n", audioMuted);
+    server.send(200, "application/json", "{\"vol\":" + String(audioVolumePercent) + ",\"muted\":" + String(audioMuted ? "true" : "false") + "}");
   });
 
   server.on("/set_steer_limits", []() {
@@ -1944,6 +2043,8 @@ void setup() {
     json += "\"speed\":" + String(driveSpeedPercent) + ",";
     json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
+    json += "\"vol\":" + String(audioVolumePercent) + ",";
+    json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"pos\":" + String(currentPositionMs);
     json += "}";
     server.send(200, "application/json", json);
