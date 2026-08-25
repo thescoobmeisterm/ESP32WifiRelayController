@@ -187,63 +187,103 @@ void playI2STone(uint32_t freq, uint32_t durationMs) {
   }
 }
 
-// --- Racing Simulator Dynamic Sound Synthesizer ---
-unsigned long lastAudioSliceMs = 0;
-double simEnginePhase = 0;
-double simDriftPhase = 0;
-unsigned long forwardCycleStartMs = 0;
-bool wasConnectedAudio = false;
+enum SoundTheme {
+  THEME_SIMULATOR = 0, // V8 Muscle Simulator
+  THEME_MARIO_KART = 1, // Classic Mario Kart (3-2-1-GO!, 150cc Kart, Hop Drift, Coin)
+  THEME_F_ZERO = 2,    // Sci-Fi F-Zero (Plasma Warp, Hover Turbine, Laser Drift, Boost)
+  THEME_CRUISN_USA = 3  // 90s Arcade Rocker (Power Chords, Twin Turbo, Screech, Checkpoint)
+};
+SoundTheme currentSoundTheme = THEME_SIMULATOR;
 
-// Ignition Engine Starter Sound (Crank-crank-crank-VROOOOM!)
-void playIgnitionSound() {
+// Plays the signature Startup Fanfare for the active theme
+void playThemeStartFanfare() {
   if (!isI2SReady) return;
   float vol = getVolumeFactor();
   if (vol <= 0.001f) return;
 
-  // Starter motor cranking chirps
-  playI2STone(115, 80); delay(35);
-  playI2STone(110, 80); delay(35);
-  playI2STone(105, 90); delay(30);
-
-  // Engine Catch & Roaring Rev
-  int sampleRate = 44100;
-  int numSamples = (sampleRate * 450) / 1000; // 450ms rev
-  int16_t samples[128];
-  double phase = 0;
-  size_t bytesWritten;
-
-  for (int i = 0; i < numSamples; i += 64) {
-    int count = min(64, numSamples - i);
-    double prog = (double)i / (double)numSamples;
-    double freq = (prog < 0.55) ? (130.0 + (prog / 0.55) * (480.0 - 130.0))
-                                : (480.0 - ((prog - 0.55) / 0.45) * (480.0 - 90.0));
-    double phaseInc = (2.0 * M_PI * freq) / sampleRate;
-
-    for (int j = 0; j < count; j++) {
-      int32_t raw = (int32_t)(
-        ((sin(phase) * 20000.0) +
-         (sin(phase * 2.0) * 10000.0) +
-         (sin(phase * 0.5) * 6000.0)) * vol
-      );
-      int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
-      samples[j * 2] = sampleVal;
-      samples[j * 2 + 1] = sampleVal;
-      phase += phaseInc;
-      if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
-    }
-    i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(15));
+  if (currentSoundTheme == THEME_MARIO_KART) {
+    // Mario Kart 3-2-1-GO! Countdown Fanfare
+    playI2STone(440, 90); delay(110);
+    playI2STone(440, 90); delay(110);
+    playI2STone(440, 90); delay(110);
+    playI2STone(880, 260); delay(50);
   }
+  else if (currentSoundTheme == THEME_F_ZERO) {
+    // F-Zero Anti-Grav Reactor Plasma Powerup Sweep
+    int sampleRate = 44100;
+    int numSamples = (sampleRate * 400) / 1000;
+    int16_t samples[128];
+    double phase = 0;
+    size_t bytesWritten;
+    for (int i = 0; i < numSamples; i += 64) {
+      int count = min(64, numSamples - i);
+      double prog = (double)i / (double)numSamples;
+      double freq = 140.0 * pow(12.0, prog); // 140Hz -> 1680Hz sweep
+      double phaseInc = (2.0 * M_PI * freq) / sampleRate;
+      for (int j = 0; j < count; j++) {
+        int32_t raw = (int32_t)(((sin(phase) * 22000.0) + (sin(phase * 2.0) * 8000.0)) * vol * (0.3 + 0.7 * prog));
+        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+        samples[j * 2] = sampleVal;
+        samples[j * 2 + 1] = sampleVal;
+        phase += phaseInc;
+        if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
+      }
+      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(15));
+    }
+  }
+  else if (currentSoundTheme == THEME_CRUISN_USA) {
+    // 90s Arcade Rock Power Chord Stabs
+    playI2STone(165, 80); delay(30);
+    playI2STone(220, 80); delay(30);
+    playI2STone(330, 80); delay(30);
+    playI2STone(440, 200); delay(50);
+  }
+  else {
+    // Default V8 Starter + Rev
+    playI2STone(115, 80); delay(35);
+    playI2STone(110, 80); delay(35);
+    playI2STone(105, 90); delay(30);
+    int sampleRate = 44100;
+    int numSamples = (sampleRate * 450) / 1000;
+    int16_t samples[128];
+    double phase = 0;
+    size_t bytesWritten;
+    for (int i = 0; i < numSamples; i += 64) {
+      int count = min(64, numSamples - i);
+      double prog = (double)i / (double)numSamples;
+      double freq = (prog < 0.55) ? (130.0 + (prog / 0.55) * (480.0 - 130.0))
+                                  : (480.0 - ((prog - 0.55) / 0.45) * (480.0 - 90.0));
+      double phaseInc = (2.0 * M_PI * freq) / sampleRate;
+      for (int j = 0; j < count; j++) {
+        int32_t raw = (int32_t)(
+          ((sin(phase) * 20000.0) +
+           (sin(phase * 2.0) * 10000.0) +
+           (sin(phase * 0.5) * 6000.0)) * vol
+        );
+        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+        samples[j * 2] = sampleVal;
+        samples[j * 2 + 1] = sampleVal;
+        phase += phaseInc;
+        if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
+      }
+      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(15));
+    }
+  }
+}
+
+void playIgnitionSound() {
+  playThemeStartFanfare();
 }
 
 void updateSimulatorAudio() {
   if (!isI2SReady) return;
   float vol = getVolumeFactor();
 
-  // Check for device connection event to play Ignition Start sound
+  // Check for device connection event to play theme startup fanfare
   bool nowConnected = isDeviceConnected();
   if (nowConnected && !wasConnectedAudio) {
     wasConnectedAudio = true;
-    playIgnitionSound();
+    playThemeStartFanfare();
     return;
   }
   if (!nowConnected) {
@@ -261,74 +301,154 @@ void updateSimulatorAudio() {
   int16_t samples[128];
   size_t bytesWritten;
 
-  // 1. TIRE DRIFT SQUEAL (Steering Left or Right)
+  // 1. STEERING / DRIFT SOUND BY THEME
   if (currentSteerState == STEER_LEFT || currentSteerState == STEER_RIGHT) {
-    for (int i = 0; i < numSamples; i += 64) {
-      int count = min(64, numSamples - i);
-      double squealFreq = 2600.0 + (sin((double)now * 0.04 + (double)i * 0.008) * 350.0) + ((rand() % 220) - 110);
-      double phaseInc = (2.0 * M_PI * squealFreq) / sampleRate;
-
-      for (int j = 0; j < count; j++) {
-        int16_t noise = (rand() % 4000) - 2000;
-        int32_t raw = (int32_t)(((sin(simDriftPhase) * 18000.0) + (sin(simDriftPhase * 1.45) * 9000.0) + noise) * vol);
-        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
-        samples[j * 2] = sampleVal;
-        samples[j * 2 + 1] = sampleVal;
-        simDriftPhase += phaseInc;
-        if (simDriftPhase >= 2.0 * M_PI) simDriftPhase -= 2.0 * M_PI;
+    if (currentSoundTheme == THEME_MARIO_KART) {
+      // Mario Kart Hop & Drift Sparkle Chirp (Alternating high frequency)
+      double driftFreq = 1600.0 + (sin((double)now * 0.08) * 600.0);
+      double phaseInc = (2.0 * M_PI * driftFreq) / sampleRate;
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        for (int j = 0; j < count; j++) {
+          int32_t raw = (int32_t)(((sin(simDriftPhase) * 16000.0) + (sin(simDriftPhase * 2.0) * 8000.0)) * vol);
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simDriftPhase += phaseInc;
+          if (simDriftPhase >= 2.0 * M_PI) simDriftPhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
       }
-      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      return;
     }
-    return;
+    else if (currentSoundTheme == THEME_F_ZERO) {
+      // F-Zero Lateral Magnetic Airbrake Laser Hiss
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        double laserFreq = 3400.0 + (sin((double)now * 0.05) * 500.0);
+        double phaseInc = (2.0 * M_PI * laserFreq) / sampleRate;
+        for (int j = 0; j < count; j++) {
+          int16_t noise = (rand() % 5000) - 2500;
+          int32_t raw = (int32_t)(((sin(simDriftPhase) * 12000.0) + noise) * vol);
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simDriftPhase += phaseInc;
+          if (simDriftPhase >= 2.0 * M_PI) simDriftPhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      }
+      return;
+    }
+    else {
+      // Realistic / Cruis'n Tire Drift Screech
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        double squealFreq = 2600.0 + (sin((double)now * 0.04 + (double)i * 0.008) * 350.0) + ((rand() % 220) - 110);
+        double phaseInc = (2.0 * M_PI * squealFreq) / sampleRate;
+        for (int j = 0; j < count; j++) {
+          int16_t noise = (rand() % 4000) - 2000;
+          int32_t raw = (int32_t)(((sin(simDriftPhase) * 18000.0) + (sin(simDriftPhase * 1.45) * 9000.0) + noise) * vol);
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simDriftPhase += phaseInc;
+          if (simDriftPhase >= 2.0 * M_PI) simDriftPhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      }
+      return;
+    }
   }
 
-  // 2. CONTINUOUS CYCLIC SHIFTING GEARBOX (Forward Driving)
+  // 2. FORWARD DRIVE SOUND BY THEME
   if (currentDriveState == DRIVE_FORWARD) {
-    unsigned long cycleElapsed = (now - forwardCycleStartMs) % 1500; // 1.5s per gear cycle
-    int gearNum = ((now - forwardCycleStartMs) / 1500) % 5;          // Gears 1 through 5 loop
-
-    double baseGearFreq = 95.0 + (gearNum * 22.0);
-    double maxGearFreq  = 310.0 + (gearNum * 28.0);
-    double engineFreq;
-
-    if (cycleElapsed < 1320) {
-      // Accelerating climb in current gear
-      double prog = (double)cycleElapsed / 1320.0;
-      engineFreq = baseGearFreq + (prog * prog * (maxGearFreq - baseGearFreq));
-    } else {
-      // Gear shift clutch dip drop
-      double dropProg = (double)(cycleElapsed - 1320) / 180.0;
-      engineFreq = maxGearFreq - (dropProg * (maxGearFreq - (baseGearFreq + 22.0)));
-    }
-
-    double phaseInc = (2.0 * M_PI * engineFreq) / sampleRate;
-
-    for (int i = 0; i < numSamples; i += 64) {
-      int count = min(64, numSamples - i);
-      for (int j = 0; j < count; j++) {
-        int32_t raw = (int32_t)(
-          ((sin(simEnginePhase) * 18000.0) +
-           (sin(simEnginePhase * 2.0) * 9000.0) +
-           (sin(simEnginePhase * 0.5) * 6000.0) +
-           (sin(simEnginePhase * 3.0) * 3500.0)) * vol
-        );
-        int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
-        samples[j * 2] = sampleVal;
-        samples[j * 2 + 1] = sampleVal;
-        simEnginePhase += phaseInc;
-        if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+    if (currentSoundTheme == THEME_MARIO_KART) {
+      // High-revving 2-Stroke 150cc Racing Kart Engine
+      unsigned long kartElapsed = (now - forwardCycleStartMs) % 1800;
+      double prog = (double)kartElapsed / 1800.0;
+      double kartFreq = 180.0 + (prog * 240.0) + (sin((double)now * 0.06) * 15.0);
+      double phaseInc = (2.0 * M_PI * kartFreq) / sampleRate;
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        for (int j = 0; j < count; j++) {
+          int32_t raw = (int32_t)(
+            ((sin(simEnginePhase) * 15000.0) +
+             (sin(simEnginePhase * 2.0) * 11000.0) +
+             (sin(simEnginePhase * 3.0) * 6000.0)) * vol
+          );
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simEnginePhase += phaseInc;
+          if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
       }
-      i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      return;
     }
-    return;
+    else if (currentSoundTheme == THEME_F_ZERO) {
+      // Screaming Anti-Gravity Plasma Jet Turbine
+      unsigned long fzElapsed = (now - forwardCycleStartMs) % 2000;
+      double prog = (double)fzElapsed / 2000.0;
+      double turbineFreq = 320.0 + (prog * 750.0);
+      double phaseInc = (2.0 * M_PI * turbineFreq) / sampleRate;
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        for (int j = 0; j < count; j++) {
+          int32_t raw = (int32_t)(
+            ((sin(simEnginePhase) * 16000.0) +
+             (sin(simEnginePhase * 1.5) * 8000.0) +
+             (sin(simEnginePhase * 3.0) * 5000.0)) * vol
+          );
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simEnginePhase += phaseInc;
+          if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      }
+      return;
+    }
+    else {
+      // Arcade V8 Sim & Cruis'n USA (5-Gear Sequential Climb & Shift)
+      unsigned long cycleElapsed = (now - forwardCycleStartMs) % 1500;
+      int gearNum = ((now - forwardCycleStartMs) / 1500) % 5;
+      double baseGearFreq = (currentSoundTheme == THEME_CRUISN_USA ? 110.0 : 95.0) + (gearNum * 22.0);
+      double maxGearFreq  = (currentSoundTheme == THEME_CRUISN_USA ? 360.0 : 310.0) + (gearNum * 28.0);
+      double engineFreq;
+      if (cycleElapsed < 1320) {
+        double prog = (double)cycleElapsed / 1320.0;
+        engineFreq = baseGearFreq + (prog * prog * (maxGearFreq - baseGearFreq));
+      } else {
+        double dropProg = (double)(cycleElapsed - 1320) / 180.0;
+        engineFreq = maxGearFreq - (dropProg * (maxGearFreq - (baseGearFreq + 22.0)));
+      }
+      double phaseInc = (2.0 * M_PI * engineFreq) / sampleRate;
+      for (int i = 0; i < numSamples; i += 64) {
+        int count = min(64, numSamples - i);
+        for (int j = 0; j < count; j++) {
+          int32_t raw = (int32_t)(
+            ((sin(simEnginePhase) * 18000.0) +
+             (sin(simEnginePhase * 2.0) * 9000.0) +
+             (sin(simEnginePhase * 0.5) * 6000.0) +
+             (sin(simEnginePhase * 3.0) * 3500.0)) * vol
+          );
+          int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
+          samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
+          simEnginePhase += phaseInc;
+          if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
+        }
+        i2s_write(I2S_NUM, samples, count * 4, &bytesWritten, pdMS_TO_TICKS(10));
+      }
+      return;
+    }
   }
 
-  // 3. V8 CAM-IDLE THROBBING RUMBLE (When Connected & Neutral/Idle)
+  // 3. IDLE / NEUTRAL ENGINE RUMBLE BY THEME
   if (isDeviceConnected() && currentDriveState == DRIVE_STOP && !isCentering) {
+    double idleFreq = (currentSoundTheme == THEME_MARIO_KART) ? (80.0 + sin((double)now * 0.03) * 6.0) :
+                      (currentSoundTheme == THEME_F_ZERO)     ? (55.0 + sin((double)now * 0.015) * 4.0) :
+                      (currentSoundTheme == THEME_CRUISN_USA) ? (38.0 + sin((double)now * 0.008) * 3.0) :
+                                                                (42.0 + sin((double)now * 0.008) * 3.0);
     double idleMod = 0.75 + (sin((double)now * 0.02) * 0.25);
-    double idleFreq = 42.0 + (sin((double)now * 0.008) * 3.0);
     double phaseInc = (2.0 * M_PI * idleFreq) / sampleRate;
-
     for (int i = 0; i < numSamples; i += 64) {
       int count = min(64, numSamples - i);
       for (int j = 0; j < count; j++) {
@@ -338,8 +458,7 @@ void updateSimulatorAudio() {
             (sin(simEnginePhase * 3.0) * 4000.0)) * idleMod) * vol
         );
         int16_t sampleVal = (int16_t)constrain(raw, -32767, 32767);
-        samples[j * 2] = sampleVal;
-        samples[j * 2 + 1] = sampleVal;
+        samples[j * 2] = sampleVal; samples[j * 2 + 1] = sampleVal;
         simEnginePhase += phaseInc;
         if (simEnginePhase >= 2.0 * M_PI) simEnginePhase -= 2.0 * M_PI;
       }
@@ -1174,6 +1293,20 @@ const char* htmlPage = R"HTML(
       </div>
     </div>
 
+    <!-- 4. RACING SOUND THEME SELECTOR -->
+    <div class="panel-card">
+      <div class="panel-title">
+        <span>🎮 RACING SOUND THEME</span>
+        <span id="themeLabel" style="color:#00f3ff; font-size:11px; font-weight:700;">🏎️ V8 SIMULATOR</span>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+        <button class="preset-btn active" id="btnTheme0" onclick="setSoundTheme(0)">🏎️ V8 SIM</button>
+        <button class="preset-btn" id="btnTheme1" onclick="setSoundTheme(1)">🍄 MARIO KART</button>
+        <button class="preset-btn" id="btnTheme2" onclick="setSoundTheme(2)">🛸 F-ZERO</button>
+        <button class="preset-btn" id="btnTheme3" onclick="setSoundTheme(3)">🌴 CRUIS'N USA</button>
+      </div>
+    </div>
+
     <!-- Wireless Gamepad Pairing & Auto-Connect Bar -->
     <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
       <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0; flex:1;">
@@ -1459,6 +1592,21 @@ serial.write("C\n") # Auto-Center Steering</pre>
         });
     };
 
+    const themeNames = ['🏎️ V8 SIMULATOR', '🍄 MARIO KART', '🛸 F-ZERO', '🌴 CRUIS\'N USA'];
+    const updateThemeButtons = (id) => {
+      id = parseInt(id);
+      document.getElementById('themeLabel').innerText = themeNames[id] || '🏎️ V8 SIMULATOR';
+      for (let i = 0; i < 4; i++) {
+        const b = document.getElementById('btnTheme' + i);
+        if (b) b.classList.toggle('active', i === id);
+      }
+    };
+
+    const setSoundTheme = (id) => {
+      updateThemeButtons(id);
+      fetch('/set_theme?val=' + id);
+    };
+
     const fetchConfig = () => {
       fetch('/get_config')
         .then(r => r.json())
@@ -1483,6 +1631,9 @@ serial.write("C\n") # Auto-Center Steering</pre>
             document.getElementById('volLabel').innerText = cfg.mute ? '🔇 MUTED' : (cfg.vol + '% VOLUME');
             document.getElementById('btnMute').classList.toggle('active', cfg.mute);
             document.getElementById('btnVol100').classList.toggle('active', !cfg.mute && cfg.vol == 100);
+          }
+          if (cfg.theme !== undefined) {
+            updateThemeButtons(cfg.theme);
           }
           if (cfg.pos !== undefined) {
             updateSteerMeter(cfg.pos);
@@ -1946,15 +2097,16 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
-  // 5. Load Persistent Speed, Steering Calibration Limits, & Audio Volume from Flash
+  // 5. Load Persistent Speed, Steering Calibration Limits, Audio Volume, & Theme from Flash
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
   steerLimitLeftMs = prefs.getLong("s_left", 600);
   steerLimitRightMs = prefs.getLong("s_right", 600);
   audioVolumePercent = prefs.getInt("vol", 100);
   audioMuted = prefs.getBool("mute", false);
+  currentSoundTheme = (SoundTheme)prefs.getInt("theme", 0);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, Vol=%d%%, Mute=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, audioVolumePercent, audioMuted);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, Vol=%d%%, Mute=%d, Theme=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, audioVolumePercent, audioMuted, (int)currentSoundTheme);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -2006,6 +2158,19 @@ void setup() {
     server.send(200, "application/json", "{\"vol\":" + String(audioVolumePercent) + ",\"muted\":" + String(audioMuted ? "true" : "false") + "}");
   });
 
+  server.on("/set_theme", []() {
+    if (server.hasArg("val")) {
+      int t = server.arg("val").toInt();
+      currentSoundTheme = (SoundTheme)constrain(t, 0, 3);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("theme", (int)currentSoundTheme);
+      prefs.end();
+      Serial.printf("Sound Theme Set: %d\n", (int)currentSoundTheme);
+      playThemeStartFanfare(); // Immediate signature audio feedback!
+    }
+    server.send(200, "application/json", "{\"theme\":" + String((int)currentSoundTheme) + "}");
+  });
+
   server.on("/set_steer_limits", []() {
     if (server.hasArg("left")) {
       steerLimitLeftMs = constrain(server.arg("left").toInt(), 100, 3000);
@@ -2045,6 +2210,7 @@ void setup() {
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
+    json += "\"theme\":" + String((int)currentSoundTheme) + ",";
     json += "\"pos\":" + String(currentPositionMs);
     json += "}";
     server.send(200, "application/json", json);
