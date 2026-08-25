@@ -86,7 +86,10 @@ enum DriveState { DRIVE_STOP, DRIVE_FORWARD, DRIVE_BACK };
 DriveState currentDriveState = DRIVE_STOP;
 
 long currentPositionMs = 0; 
-const long MAX_STEER_MS = 1000; // 1 second max travel from center
+// --- Configurable Drive Speed & Steering Calibration Limits ---
+int driveSpeedPercent = 60;          // Default drive throttle: 60% (Range: 20% to 100%)
+long steerLimitLeftMs = 600;         // Max Left steering lock travel in ms (Range: 100ms - 3000ms)
+long steerLimitRightMs = 600;        // Max Right steering lock travel in ms (Range: 100ms - 3000ms)
 unsigned long lastSteerUpdateMs = 0;
 bool isCentering = false;
 
@@ -857,6 +860,91 @@ const char* htmlPage = R"HTML(
       color: #86efac;
     }
 
+    /* Speed & Steering Calibration Panel Styles */
+    .panel-card {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px;
+      width: 100%;
+      margin-top: 10px;
+      box-sizing: border-box;
+    }
+    .panel-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 11px;
+      color: #00f3ff;
+      font-weight: 700;
+      letter-spacing: 1px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .control-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #1e293b;
+      outline: none;
+      border: 1px solid #475569;
+      margin: 8px 0;
+    }
+    .control-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #00f3ff;
+      cursor: pointer;
+      box-shadow: 0 0 10px #00f3ff;
+    }
+    .preset-btn {
+      flex: 1;
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid #475569;
+      color: #94a3b8;
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-transform: uppercase;
+    }
+    .preset-btn:active, .preset-btn.active {
+      background: rgba(0, 243, 255, 0.2);
+      border-color: #00f3ff;
+      color: #00f3ff;
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.4);
+    }
+    .pos-meter-track {
+      width: 100%;
+      height: 12px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      position: relative;
+      overflow: hidden;
+      margin: 6px 0;
+    }
+    .pos-meter-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      background: #00f3ff;
+      border-radius: 4px;
+      box-shadow: 0 0 8px #00f3ff;
+      transform: translateX(-50%);
+      left: 50%;
+      transition: left 0.1s ease-out;
+    }
+
     /* Documentation & Guide Tab Cards */
     .doc-card {
       background: rgba(15, 23, 42, 0.9);
@@ -997,6 +1085,57 @@ const char* htmlPage = R"HTML(
     <div class="utility-bar">
       <button class="btn-util" onclick="sendCommand('center')">Center Steering (C)</button>
       <button class="btn-util" onclick="sendCommand('set_center')">Set Center (Z)</button>
+    </div>
+
+    <!-- 1. DYNAMIC DRIVE SPEED GOVERNOR PANEL -->
+    <div class="panel-card">
+      <div class="panel-title">
+        <span>⚡ DRIVE SPEED GOVERNOR</span>
+        <span id="speedLabel" style="color:#00ff88; font-size:12px; font-weight:900;">60% SPEED</span>
+      </div>
+      <input type="range" id="speedSlider" class="control-slider" min="20" max="100" value="60" oninput="onSpeedChange(this.value)">
+      <div style="display:flex; gap:6px; margin-top:6px;">
+        <button class="preset-btn" id="btnSpdSlow" onclick="setSpeedPreset(35)">🐢 SLOW (35%)</button>
+        <button class="preset-btn active" id="btnSpdMed" onclick="setSpeedPreset(65)">🚗 CRUISE (65%)</button>
+        <button class="preset-btn" id="btnSpdFast" onclick="setSpeedPreset(100)">⚡ TURBO (100%)</button>
+      </div>
+    </div>
+
+    <!-- 2. STEERING TRAVEL LIMITS & MIN/MAX CALIBRATION PANEL -->
+    <div class="panel-card">
+      <div class="panel-title">
+        <span>📐 STEERING LIMITS & CALIBRATION</span>
+        <span id="posLabel" style="color:#38bdf8; font-size:11px;">POS: 0 ms</span>
+      </div>
+      
+      <!-- Live Steering Travel Bar -->
+      <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace;">
+        <span id="leftLimitDisplay">LEFT: -600ms</span>
+        <span>CENTER: 0</span>
+        <span id="rightLimitDisplay">RIGHT: +600ms</span>
+      </div>
+      <div class="pos-meter-track">
+        <div class="pos-meter-marker" id="posMarker" style="left:50%;"></div>
+      </div>
+
+      <!-- Limit Sliders -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+        <div>
+          <div style="font-size:9px; color:#94a3b8; font-weight:bold;">LEFT MAX LOCK (ms)</div>
+          <input type="range" id="leftLimitSlider" class="control-slider" min="100" max="2000" step="25" value="600" oninput="onSteerLimitsChange()">
+        </div>
+        <div>
+          <div style="font-size:9px; color:#94a3b8; font-weight:bold;">RIGHT MAX LOCK (ms)</div>
+          <input type="range" id="rightLimitSlider" class="control-slider" min="100" max="2000" step="25" value="600" oninput="onSteerLimitsChange()">
+        </div>
+      </div>
+
+      <!-- Quick 1-Tap Calibration Locks -->
+      <div style="display:flex; gap:6px; margin-top:8px;">
+        <button class="preset-btn" onclick="setLeftLimitNow()" style="color:#fcd34d; border-color:#f59e0b;">👈 LOCK LEFT</button>
+        <button class="preset-btn" onclick="sendCommand('set_center')" style="color:#00f3ff; border-color:#00f3ff;">🎯 ZERO CENTER</button>
+        <button class="preset-btn" onclick="setRightLimitNow()" style="color:#60a5fa; border-color:#3b82f6;">👉 LOCK RIGHT</button>
+      </div>
     </div>
 
     <!-- Wireless Gamepad Pairing & Auto-Connect Bar -->
@@ -1189,6 +1328,95 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .catch(e => console.error(e));
     };
 
+    let currentLeftLimit = 600;
+    let currentRightLimit = 600;
+
+    const updateSteerMeter = (pos) => {
+      if (pos === undefined) return;
+      document.getElementById('posLabel').innerText = 'POS: ' + pos + ' ms';
+      const maxSpan = Math.max(200, currentLeftLimit + currentRightLimit);
+      let pct = ((pos + currentLeftLimit) / maxSpan) * 100;
+      pct = Math.max(5, Math.min(95, pct));
+      document.getElementById('posMarker').style.left = pct + '%';
+    };
+
+    const onSpeedChange = (val) => {
+      document.getElementById('speedLabel').innerText = val + '% SPEED';
+      fetch('/set_speed?val=' + val);
+      updateSpeedPresetButtons(val);
+    };
+
+    const setSpeedPreset = (val) => {
+      document.getElementById('speedSlider').value = val;
+      onSpeedChange(val);
+    };
+
+    const updateSpeedPresetButtons = (val) => {
+      val = parseInt(val);
+      document.getElementById('btnSpdSlow').classList.toggle('active', val <= 40);
+      document.getElementById('btnSpdMed').classList.toggle('active', val > 40 && val < 90);
+      document.getElementById('btnSpdFast').classList.toggle('active', val >= 90);
+    };
+
+    const onSteerLimitsChange = () => {
+      const leftVal = document.getElementById('leftLimitSlider').value;
+      const rightVal = document.getElementById('rightLimitSlider').value;
+      currentLeftLimit = parseInt(leftVal);
+      currentRightLimit = parseInt(rightVal);
+      document.getElementById('leftLimitDisplay').innerText = 'LEFT: -' + leftVal + 'ms';
+      document.getElementById('rightLimitDisplay').innerText = 'RIGHT: +' + rightVal + 'ms';
+      fetch('/set_steer_limits?left=' + leftVal + '&right=' + rightVal);
+    };
+
+    const setLeftLimitNow = () => {
+      fetch('/set_left_limit')
+        .then(r => r.json())
+        .then(d => {
+          if (d.left) {
+            document.getElementById('leftLimitSlider').value = d.left;
+            onSteerLimitsChange();
+          }
+        });
+    };
+
+    const setRightLimitNow = () => {
+      fetch('/set_right_limit')
+        .then(r => r.json())
+        .then(d => {
+          if (d.right) {
+            document.getElementById('rightLimitSlider').value = d.right;
+            onSteerLimitsChange();
+          }
+        });
+    };
+
+    const fetchConfig = () => {
+      fetch('/get_config')
+        .then(r => r.json())
+        .then(cfg => {
+          if (cfg.speed) {
+            document.getElementById('speedSlider').value = cfg.speed;
+            document.getElementById('speedLabel').innerText = cfg.speed + '% SPEED';
+            updateSpeedPresetButtons(cfg.speed);
+          }
+          if (cfg.steer_left) {
+            document.getElementById('leftLimitSlider').value = cfg.steer_left;
+            currentLeftLimit = parseInt(cfg.steer_left);
+            document.getElementById('leftLimitDisplay').innerText = 'LEFT: -' + cfg.steer_left + 'ms';
+          }
+          if (cfg.steer_right) {
+            document.getElementById('rightLimitSlider').value = cfg.steer_right;
+            currentRightLimit = parseInt(cfg.steer_right);
+            document.getElementById('rightLimitDisplay').innerText = 'RIGHT: +' + cfg.steer_right + 'ms';
+          }
+          if (cfg.pos !== undefined) {
+            updateSteerMeter(cfg.pos);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchConfig();
+
     const fetchStatus = () => {
       fetch('/status')
         .then(r => r.json())
@@ -1197,6 +1425,9 @@ serial.write("C\n") # Auto-Center Steering</pre>
           updatePinHud(5, d.pin5 === 'ON');
           updatePinHud(6, d.pin6 === 'ON');
           updatePinHud(7, d.pin7 === 'ON');
+          if (d.pos !== undefined) {
+            updateSteerMeter(d.pos);
+          }
         })
         .catch(() => {});
     };
@@ -1466,20 +1697,20 @@ void processCommand(String cmd) {
   lastHeartbeatMs = millis(); // Refresh heartbeat on every command
 
   if (cmd == "forward" || cmd == "F" || cmd == "f" || cmd == "W" || cmd == "w") {
-    stopDriving(); delay(50);
-    setRelayOn(pinForward);
+    stopDriving(); delay(30);
     currentDriveState = DRIVE_FORWARD;
     forwardCycleStartMs = millis();
+    if (driveSpeedPercent >= 100) setRelayOn(pinForward);
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
-    stopDriving(); delay(50);
-    setRelayOn(pinBack);
+    stopDriving(); delay(30);
     currentDriveState = DRIVE_BACK;
+    if (driveSpeedPercent >= 100) setRelayOn(pinBack);
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
     isCentering = false;
-    if (currentPositionMs > -MAX_STEER_MS) {
-      stopSteering(); delay(50);
+    if (currentPositionMs > -steerLimitLeftMs) {
+      stopSteering(); delay(30);
       currentSteerState = STEER_LEFT;
       lastSteerUpdateMs = millis();
       setRelayOn(pinLeft);
@@ -1487,8 +1718,8 @@ void processCommand(String cmd) {
   }
   else if (cmd == "right" || cmd == "R" || cmd == "r" || cmd == "D" || cmd == "d") {
     isCentering = false;
-    if (currentPositionMs < MAX_STEER_MS) {
-      stopSteering(); delay(50);
+    if (currentPositionMs < steerLimitRightMs) {
+      stopSteering(); delay(30);
       currentSteerState = STEER_RIGHT;
       lastSteerUpdateMs = millis();
       setRelayOn(pinRight);
@@ -1640,6 +1871,14 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
+  // 5. Load Persistent Speed & Steering Calibration Limits from Flash
+  prefs.begin("tink_cfg", true);
+  driveSpeedPercent = prefs.getInt("speed", 60);
+  steerLimitLeftMs = prefs.getLong("s_left", 600);
+  steerLimitRightMs = prefs.getLong("s_right", 600);
+  prefs.end();
+  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs);
+
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
   server.on("/wiring", sendHtmlWithNoCache);
@@ -1651,7 +1890,61 @@ void setup() {
     json += "\"pin4\":\"" + String(currentDriveState == DRIVE_FORWARD ? "ON" : "OFF") + "\",";
     json += "\"pin5\":\"" + String(currentDriveState == DRIVE_BACK ? "ON" : "OFF") + "\",";
     json += "\"pin6\":\"" + String(currentSteerState == STEER_LEFT ? "ON" : "OFF") + "\",";
-    json += "\"pin7\":\"" + String(currentSteerState == STEER_RIGHT ? "ON" : "OFF") + "\"";
+    json += "\"pin7\":\"" + String(currentSteerState == STEER_RIGHT ? "ON" : "OFF") + "\",";
+    json += "\"pos\":" + String(currentPositionMs);
+    json += "}";
+    server.send(200, "application/json", json);
+  });
+
+  server.on("/set_speed", []() {
+    if (server.hasArg("val")) {
+      driveSpeedPercent = constrain(server.arg("val").toInt(), 20, 100);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("speed", driveSpeedPercent);
+      prefs.end();
+      Serial.printf("Drive Speed Updated: %d%%\n", driveSpeedPercent);
+    }
+    server.send(200, "application/json", "{\"speed\":" + String(driveSpeedPercent) + "}");
+  });
+
+  server.on("/set_steer_limits", []() {
+    if (server.hasArg("left")) {
+      steerLimitLeftMs = constrain(server.arg("left").toInt(), 100, 3000);
+    }
+    if (server.hasArg("right")) {
+      steerLimitRightMs = constrain(server.arg("right").toInt(), 100, 3000);
+    }
+    prefs.begin("tink_cfg", false);
+    prefs.putLong("s_left", steerLimitLeftMs);
+    prefs.putLong("s_right", steerLimitRightMs);
+    prefs.end();
+    server.send(200, "application/json", "{\"left\":" + String(steerLimitLeftMs) + ",\"right\":" + String(steerLimitRightMs) + "}");
+  });
+
+  server.on("/set_left_limit", []() {
+    steerLimitLeftMs = max(100L, abs(currentPositionMs));
+    prefs.begin("tink_cfg", false);
+    prefs.putLong("s_left", steerLimitLeftMs);
+    prefs.end();
+    triggerSetCenterFlash();
+    server.send(200, "application/json", "{\"left\":" + String(steerLimitLeftMs) + "}");
+  });
+
+  server.on("/set_right_limit", []() {
+    steerLimitRightMs = max(100L, abs(currentPositionMs));
+    prefs.begin("tink_cfg", false);
+    prefs.putLong("s_right", steerLimitRightMs);
+    prefs.end();
+    triggerSetCenterFlash();
+    server.send(200, "application/json", "{\"right\":" + String(steerLimitRightMs) + "}");
+  });
+
+  server.on("/get_config", []() {
+    String json = "{";
+    json += "\"speed\":" + String(driveSpeedPercent) + ",";
+    json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
+    json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
+    json += "\"pos\":" + String(currentPositionMs);
     json += "}";
     server.send(200, "application/json", json);
   });
@@ -1701,7 +1994,7 @@ void setup() {
   Serial.println("HTTP server started");
   lastHeartbeatMs = millis();
 
-  // 5. Load Saved Controller MAC from Flash & Trigger Immediate Auto-Connect
+  // 6. Load Saved Controller MAC from Flash
   prefs.begin("tink_gp", true);
   savedGamepadMac = prefs.getString("mac", "");
   String savedName = prefs.getString("name", "");
@@ -1719,6 +2012,24 @@ void loop() {
 
   // Safe Asynchronous Gamepad Pairing
   handleGamepadConnectionLoop();
+
+  // Dynamic Relay Drive Speed Governor (Time-sliced Soft PWM)
+  if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
+    if (driveSpeedPercent >= 100) {
+      if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
+      else setRelayOn(pinBack);
+    } else {
+      unsigned long cycleMs = millis() % 120; // 120ms smooth time slice cycle
+      unsigned long onThresholdMs = (120 * driveSpeedPercent) / 100;
+      if (cycleMs < onThresholdMs) {
+        if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
+        else setRelayOn(pinBack);
+      } else {
+        if (currentDriveState == DRIVE_FORWARD) setRelayOff(pinForward);
+        else setRelayOff(pinBack);
+      }
+    }
+  }
 
   // Real-time Racing Simulator Dynamic Soundscape (Idle, Shifting, Drifting)
   updateSimulatorAudio();
@@ -1743,18 +2054,18 @@ void loop() {
   
   // Steering Limits & Centering Logic
   if (isCentering) {
-     if (currentPositionMs > 50) {
+     if (currentPositionMs > 40) {
          if (currentSteerState != STEER_LEFT) {
-             stopSteering(); delay(50);
+             stopSteering(); delay(30);
              currentSteerState = STEER_LEFT;
              lastSteerUpdateMs = millis();
              setRelayOn(pinLeft);
          } else {
              updateSteeringPosition();
          }
-     } else if (currentPositionMs < -50) {
+     } else if (currentPositionMs < -40) {
          if (currentSteerState != STEER_RIGHT) {
-             stopSteering(); delay(50);
+             stopSteering(); delay(30);
              currentSteerState = STEER_RIGHT;
              lastSteerUpdateMs = millis();
              setRelayOn(pinRight);
@@ -1770,13 +2081,13 @@ void loop() {
   } else {
       if (currentSteerState == STEER_LEFT) {
         updateSteeringPosition();
-        if (currentPositionMs <= -MAX_STEER_MS) {
+        if (currentPositionMs <= -steerLimitLeftMs) {
           stopSteering(); 
         }
       } 
       else if (currentSteerState == STEER_RIGHT) {
         updateSteeringPosition();
-        if (currentPositionMs >= MAX_STEER_MS) {
+        if (currentPositionMs >= steerLimitRightMs) {
           stopSteering(); 
         }
       }
