@@ -86,6 +86,10 @@ enum DriveState { DRIVE_STOP, DRIVE_FORWARD, DRIVE_BACK };
 DriveState currentDriveState = DRIVE_STOP;
 
 long currentPositionMs = 0; 
+// --- Motor Hardware Driver Mode ---
+enum MotorDriverType { DRIVER_RELAY = 0, DRIVER_L298N = 1 };
+MotorDriverType driveMotorDriver = DRIVER_RELAY; // Default: Relay Module (or L298N)
+
 // --- Configurable Drive Speed & Steering Calibration Limits ---
 int driveSpeedPercent = 60;          // Default drive throttle: 60% (Range: 20% to 100%)
 long steerLimitLeftMs = 2500;        // Max Left steering lock travel in ms (Range: 100ms - 15000ms)
@@ -1250,6 +1254,21 @@ const char* htmlPage = R"HTML(
       </div>
     </div>
 
+    <!-- DRIVE MOTOR HARDWARE DRIVER SELECTOR -->
+    <div class="panel-card">
+      <div class="panel-title">
+        <span>⚙️ DRIVE MOTOR HARDWARE DRIVER</span>
+        <span id="driverLabel" style="color:#f59e0b; font-size:11px; font-weight:700;">🎛️ 4-CH RELAYS</span>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+        <button class="preset-btn active" id="btnDriver0" onclick="setMotorDriver(0)">🎛️ 4-CH RELAYS</button>
+        <button class="preset-btn" id="btnDriver1" onclick="setMotorDriver(1)">⚡ L298N H-BRIDGE</button>
+      </div>
+      <div style="font-size:10px; color:#64748b; margin-top:4px; font-family:sans-serif;" id="driverDesc">
+        Mode: Relays (Time-Sliced Soft PWM on GPIO 4/5)
+      </div>
+    </div>
+
     <!-- 2. STEERING TRAVEL LIMITS & MIN/MAX CALIBRATION PANEL -->
     <div class="panel-card">
       <div class="panel-title">
@@ -1440,6 +1459,22 @@ const char* htmlPage = R"HTML(
         Relay 3 COM & Relay 4 COM connect to Actuator Terminals.<br>
         Relay NOs = +12V. Relay NCs = Ground.<br><br>
         <span style="color:#ef4444;">⚠️ COMMON GROUND REQUIRED: Connect ESP32 GND, Amp GND, 6V GND, and 12V GND together.</span>
+      </p>
+    </div>
+
+    <div class="doc-card">
+      <h3>⚡ L298N DUAL H-BRIDGE MOTOR DRIVER WIRING (SOLID STATE PWM)</h3>
+      <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
+        <b>L298N Logic Connections to ESP32-S3:</b><br>
+        • <b>IN1</b> ➔ <code>GPIO 4</code> (Forward PWM Speed Control)<br>
+        • <b>IN2</b> ➔ <code>GPIO 5</code> (Reverse PWM Speed Control)<br>
+        • <b>ENA (Enable A)</b> ➔ Keep 5V Jumper ON (or remove jumper and connect to 3.3V/5V)<br>
+        • <b>GND</b> ➔ <code>ESP32 GND</code> (Common Ground)<br><br>
+        <b>L298N Power & Motor Terminals:</b><br>
+        • <b>+12V / VCC Screw Terminal</b> ➔ Drive Battery Positive (+6V to +12V)<br>
+        • <b>GND Screw Terminal</b> ➔ Drive Battery Negative (GND) & ESP32 GND<br>
+        • <b>OUT1 & OUT2 Screw Terminals</b> ➔ Drive DC Motor Terminals (+ / -)<br><br>
+        <span style="color:#00ff88;">💡 Benefit: Pure solid-state variable speed with 0dB silent operation and high torque!</span>
       </p>
     </div>
   </div>
@@ -1686,6 +1721,31 @@ serial.write("C\n") # Auto-Center Steering</pre>
       fetch('/set_theme?val=' + id);
     };
 
+    const updateMotorDriverHud = (id) => {
+      id = parseInt(id);
+      const isL298N = (id === 1);
+      const lbl = document.getElementById('driverLabel');
+      const b0 = document.getElementById('btnDriver0');
+      const b1 = document.getElementById('btnDriver1');
+      const desc = document.getElementById('driverDesc');
+      if (lbl) {
+        lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
+        lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
+      }
+      if (b0) b0.classList.toggle('active', !isL298N);
+      if (b1) b1.classList.toggle('active', isL298N);
+      if (desc) {
+        desc.innerText = isL298N ? 
+          'Mode: L298N Solid-State Hardware PWM (Silent & High Torque on GPIO 4/5)' : 
+          'Mode: 4-Channel Relay Module (Time-Sliced Soft PWM on GPIO 4/5)';
+      }
+    };
+
+    const setMotorDriver = (id) => {
+      updateMotorDriverHud(id);
+      fetch('/set_driver?val=' + id);
+    };
+
     const fetchConfig = () => {
       fetch('/get_config')
         .then(r => r.json())
@@ -1694,6 +1754,9 @@ serial.write("C\n") # Auto-Center Steering</pre>
             document.getElementById('speedSlider').value = cfg.speed;
             document.getElementById('speedLabel').innerText = cfg.speed + '% SPEED';
             updateSpeedPresetButtons(cfg.speed);
+          }
+          if (cfg.driver !== undefined) {
+            updateMotorDriverHud(cfg.driver);
           }
           if (cfg.steer_left) {
             const s = document.getElementById('leftLimitSlider');
@@ -1950,8 +2013,13 @@ serial.write("C\n") # Auto-Center Steering</pre>
 )HTML";
 
 void stopDriving() {
-  setRelayOff(pinForward);
-  setRelayOff(pinBack);
+  if (driveMotorDriver == DRIVER_L298N) {
+    analogWrite(pinForward, 0);
+    analogWrite(pinBack, 0);
+  } else {
+    setRelayOff(pinForward);
+    setRelayOff(pinBack);
+  }
   currentDriveState = DRIVE_STOP;
 }
 
@@ -2012,15 +2080,27 @@ void processCommand(String cmd) {
   lastHeartbeatMs = millis(); // Refresh heartbeat on every command
 
   if (cmd == "forward" || cmd == "F" || cmd == "f" || cmd == "W" || cmd == "w") {
-    stopDriving(); delay(30);
+    stopDriving(); delay(20);
     currentDriveState = DRIVE_FORWARD;
     forwardCycleStartMs = millis();
-    if (driveSpeedPercent >= 100) setRelayOn(pinForward);
+    if (driveMotorDriver == DRIVER_L298N) {
+      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
+      analogWrite(pinBack, 0);
+      analogWrite(pinForward, pwmVal);
+    } else {
+      if (driveSpeedPercent >= 100) setRelayOn(pinForward);
+    }
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
-    stopDriving(); delay(30);
+    stopDriving(); delay(20);
     currentDriveState = DRIVE_BACK;
-    if (driveSpeedPercent >= 100) setRelayOn(pinBack);
+    if (driveMotorDriver == DRIVER_L298N) {
+      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
+      analogWrite(pinForward, 0);
+      analogWrite(pinBack, pwmVal);
+    } else {
+      if (driveSpeedPercent >= 100) setRelayOn(pinBack);
+    }
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
     isCentering = false;
@@ -2186,7 +2266,7 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
-  // 5. Load Persistent Speed, Steering Calibration Limits, Audio Volume, & Theme from Flash
+  // 5. Load Persistent Speed, Steering Calibration Limits, Audio Volume, Theme, & Motor Driver from Flash
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
   steerLimitLeftMs = prefs.getLong("s_left", 2500);
@@ -2195,8 +2275,9 @@ void setup() {
   audioVolumePercent = prefs.getInt("vol", 100);
   audioMuted = prefs.getBool("mute", false);
   currentSoundTheme = (SoundTheme)prefs.getInt("theme", 0);
+  driveMotorDriver = (MotorDriverType)prefs.getInt("driver", 0);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, Driver=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -2213,6 +2294,19 @@ void setup() {
     json += "\"pos\":" + String(currentPositionMs);
     json += "}";
     server.send(200, "application/json", json);
+  });
+
+  server.on("/set_driver", []() {
+    if (server.hasArg("val")) {
+      int d = server.arg("val").toInt();
+      stopDriving();
+      driveMotorDriver = (MotorDriverType)constrain(d, 0, 1);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("driver", (int)driveMotorDriver);
+      prefs.end();
+      Serial.printf("Drive Motor Driver Set: %s\n", driveMotorDriver == DRIVER_L298N ? "L298N H-Bridge (PWM)" : "Relay Module");
+    }
+    server.send(200, "application/json", "{\"driver\":" + String((int)driveMotorDriver) + "}");
   });
 
   server.on("/set_speed", []() {
@@ -2308,6 +2402,7 @@ void setup() {
     json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
     json += "\"limits_enabled\":" + String(steerLimitsEnabled ? "true" : "false") + ",";
+    json += "\"driver\":" + String((int)driveMotorDriver) + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"theme\":" + String((int)currentSoundTheme) + ",";
@@ -2380,20 +2475,32 @@ void loop() {
   // Safe Asynchronous Gamepad Pairing
   handleGamepadConnectionLoop();
 
-  // Dynamic Relay Drive Speed Governor (Time-sliced Soft PWM)
+  // Dynamic Drive Speed Controller (L298N Hardware PWM vs Relay Soft PWM)
   if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
-    if (driveSpeedPercent >= 100) {
-      if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
-      else setRelayOn(pinBack);
+    if (driveMotorDriver == DRIVER_L298N) {
+      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
+      if (currentDriveState == DRIVE_FORWARD) {
+        analogWrite(pinBack, 0);
+        analogWrite(pinForward, pwmVal);
+      } else {
+        analogWrite(pinForward, 0);
+        analogWrite(pinBack, pwmVal);
+      }
     } else {
-      unsigned long cycleMs = millis() % 120; // 120ms smooth time slice cycle
-      unsigned long onThresholdMs = (120 * driveSpeedPercent) / 100;
-      if (cycleMs < onThresholdMs) {
+      // Relay Module (Time-sliced 120ms Soft PWM)
+      if (driveSpeedPercent >= 100) {
         if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
         else setRelayOn(pinBack);
       } else {
-        if (currentDriveState == DRIVE_FORWARD) setRelayOff(pinForward);
-        else setRelayOff(pinBack);
+        unsigned long cycleMs = millis() % 120; // 120ms smooth time slice cycle
+        unsigned long onThresholdMs = (120 * driveSpeedPercent) / 100;
+        if (cycleMs < onThresholdMs) {
+          if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
+          else setRelayOn(pinBack);
+        } else {
+          if (currentDriveState == DRIVE_FORWARD) setRelayOff(pinForward);
+          else setRelayOff(pinBack);
+        }
       }
     }
   }
