@@ -88,8 +88,9 @@ DriveState currentDriveState = DRIVE_STOP;
 long currentPositionMs = 0; 
 // --- Configurable Drive Speed & Steering Calibration Limits ---
 int driveSpeedPercent = 60;          // Default drive throttle: 60% (Range: 20% to 100%)
-long steerLimitLeftMs = 600;         // Max Left steering lock travel in ms (Range: 100ms - 3000ms)
-long steerLimitRightMs = 600;        // Max Right steering lock travel in ms (Range: 100ms - 3000ms)
+long steerLimitLeftMs = 2500;        // Max Left steering lock travel in ms (Range: 100ms - 15000ms)
+long steerLimitRightMs = 2500;       // Max Right steering lock travel in ms (Range: 100ms - 15000ms)
+bool steerLimitsEnabled = true;      // If false, unrestricted continuous steering is enabled
 unsigned long lastSteerUpdateMs = 0;
 bool isCentering = false;
 
@@ -1258,9 +1259,9 @@ const char* htmlPage = R"HTML(
       
       <!-- Live Steering Travel Bar -->
       <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace;">
-        <span id="leftLimitDisplay">LEFT: -600ms</span>
-        <span>CENTER: 0</span>
-        <span id="rightLimitDisplay">RIGHT: +600ms</span>
+        <span id="leftLimitDisplay">LEFT: -2500ms</span>
+        <span id="limitsModeLabel" style="color:#22c55e; font-weight:bold;">LIMITS: ACTIVE</span>
+        <span id="rightLimitDisplay">RIGHT: +2500ms</span>
       </div>
       <div class="pos-meter-track">
         <div class="pos-meter-marker" id="posMarker" style="left:50%;"></div>
@@ -1269,20 +1270,36 @@ const char* htmlPage = R"HTML(
       <!-- Limit Sliders -->
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
         <div>
-          <div style="font-size:9px; color:#94a3b8; font-weight:bold;">LEFT MAX LOCK (ms)</div>
-          <input type="range" id="leftLimitSlider" class="control-slider" min="100" max="2000" step="25" value="600" oninput="onSteerLimitsChange()">
+          <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
+            <span>LEFT MAX LOCK</span>
+            <span id="leftValLabel">2500ms</span>
+          </div>
+          <input type="range" id="leftLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
         </div>
         <div>
-          <div style="font-size:9px; color:#94a3b8; font-weight:bold;">RIGHT MAX LOCK (ms)</div>
-          <input type="range" id="rightLimitSlider" class="control-slider" min="100" max="2000" step="25" value="600" oninput="onSteerLimitsChange()">
+          <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
+            <span>RIGHT MAX LOCK</span>
+            <span id="rightValLabel">2500ms</span>
+          </div>
+          <input type="range" id="rightLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
         </div>
       </div>
 
-      <!-- Quick 1-Tap Calibration Locks -->
+      <!-- Quick Travel Distance Presets -->
+      <div style="display:flex; gap:6px; margin-top:6px;">
+        <button class="preset-btn" onclick="setSteerPreset(1000)">1.0s</button>
+        <button class="preset-btn active" id="btnSteer25" onclick="setSteerPreset(2500)">2.5s</button>
+        <button class="preset-btn" id="btnSteer50" onclick="setSteerPreset(5000)">5.0s</button>
+        <button class="preset-btn" id="btnSteer100" onclick="setSteerPreset(10000)">10.0s</button>
+        <button class="preset-btn" onclick="adjustSteerLimits(1000)" style="color:#00f3ff;">+1.0s</button>
+      </div>
+
+      <!-- 1-Tap Calibration Locks & Free Steer Mode -->
       <div style="display:flex; gap:6px; margin-top:8px;">
         <button class="preset-btn" onclick="setLeftLimitNow()" style="color:#fcd34d; border-color:#f59e0b;">👈 LOCK LEFT</button>
         <button class="preset-btn" onclick="sendCommand('set_center')" style="color:#00f3ff; border-color:#00f3ff;">🎯 ZERO CENTER</button>
         <button class="preset-btn" onclick="setRightLimitNow()" style="color:#60a5fa; border-color:#3b82f6;">👉 LOCK RIGHT</button>
+        <button class="preset-btn" id="btnFreeSteer" onclick="toggleFreeSteer()" style="color:#ec4899; border-color:#ec4899;">🔓 FREE STEER</button>
       </div>
     </div>
 
@@ -1507,8 +1524,9 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .catch(e => console.error(e));
     };
 
-    let currentLeftLimit = 600;
-    let currentRightLimit = 600;
+    let currentLeftLimit = 2500;
+    let currentRightLimit = 2500;
+    let isLimitsEnabled = true;
 
     const updateSteerMeter = (pos) => {
       if (pos === undefined) return;
@@ -1544,7 +1562,31 @@ serial.write("C\n") # Auto-Center Steering</pre>
       currentRightLimit = parseInt(rightVal);
       document.getElementById('leftLimitDisplay').innerText = 'LEFT: -' + leftVal + 'ms';
       document.getElementById('rightLimitDisplay').innerText = 'RIGHT: +' + rightVal + 'ms';
+      document.getElementById('leftValLabel').innerText = leftVal + 'ms';
+      document.getElementById('rightValLabel').innerText = rightVal + 'ms';
       fetch('/set_steer_limits?left=' + leftVal + '&right=' + rightVal);
+    };
+
+    const setSteerPreset = (val) => {
+      const sL = document.getElementById('leftLimitSlider');
+      const sR = document.getElementById('rightLimitSlider');
+      if (val > sL.max) sL.max = val;
+      if (val > sR.max) sR.max = val;
+      sL.value = val;
+      sR.value = val;
+      onSteerLimitsChange();
+    };
+
+    const adjustSteerLimits = (delta) => {
+      const sL = document.getElementById('leftLimitSlider');
+      const sR = document.getElementById('rightLimitSlider');
+      const l = Math.max(100, Math.min(15000, parseInt(sL.value) + delta));
+      const r = Math.max(100, Math.min(15000, parseInt(sR.value) + delta));
+      if (l > sL.max) sL.max = l;
+      if (r > sR.max) sR.max = r;
+      sL.value = l;
+      sR.value = r;
+      onSteerLimitsChange();
     };
 
     const setLeftLimitNow = () => {
@@ -1552,7 +1594,9 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .then(r => r.json())
         .then(d => {
           if (d.left) {
-            document.getElementById('leftLimitSlider').value = d.left;
+            const s = document.getElementById('leftLimitSlider');
+            if (d.left > s.max) s.max = d.left;
+            s.value = d.left;
             onSteerLimitsChange();
           }
         });
@@ -1563,10 +1607,38 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .then(r => r.json())
         .then(d => {
           if (d.right) {
-            document.getElementById('rightLimitSlider').value = d.right;
+            const s = document.getElementById('rightLimitSlider');
+            if (d.right > s.max) s.max = d.right;
+            s.value = d.right;
             onSteerLimitsChange();
           }
         });
+    };
+
+    const toggleFreeSteer = () => {
+      fetch('/toggle_steer_limits')
+        .then(r => r.json())
+        .then(d => {
+          isLimitsEnabled = d.limits_enabled;
+          updateLimitsModeHud(isLimitsEnabled);
+        });
+    };
+
+    const updateLimitsModeHud = (enabled) => {
+      const lbl = document.getElementById('limitsModeLabel');
+      const btn = document.getElementById('btnFreeSteer');
+      if (!lbl || !btn) return;
+      if (enabled) {
+        lbl.innerText = 'LIMITS: ACTIVE';
+        lbl.style.color = '#22c55e';
+        btn.classList.remove('active');
+        btn.innerText = '🔓 FREE STEER';
+      } else {
+        lbl.innerText = 'LIMITS: UNRESTRICTED';
+        lbl.style.color = '#ec4899';
+        btn.classList.add('active');
+        btn.innerText = '🔒 RESTRICT';
+      }
     };
 
     let isAudioMuted = false;
@@ -1624,14 +1696,24 @@ serial.write("C\n") # Auto-Center Steering</pre>
             updateSpeedPresetButtons(cfg.speed);
           }
           if (cfg.steer_left) {
-            document.getElementById('leftLimitSlider').value = cfg.steer_left;
+            const s = document.getElementById('leftLimitSlider');
+            if (cfg.steer_left > s.max) s.max = cfg.steer_left;
+            s.value = cfg.steer_left;
             currentLeftLimit = parseInt(cfg.steer_left);
             document.getElementById('leftLimitDisplay').innerText = 'LEFT: -' + cfg.steer_left + 'ms';
+            document.getElementById('leftValLabel').innerText = cfg.steer_left + 'ms';
           }
           if (cfg.steer_right) {
-            document.getElementById('rightLimitSlider').value = cfg.steer_right;
+            const s = document.getElementById('rightLimitSlider');
+            if (cfg.steer_right > s.max) s.max = cfg.steer_right;
+            s.value = cfg.steer_right;
             currentRightLimit = parseInt(cfg.steer_right);
             document.getElementById('rightLimitDisplay').innerText = 'RIGHT: +' + cfg.steer_right + 'ms';
+            document.getElementById('rightValLabel').innerText = cfg.steer_right + 'ms';
+          }
+          if (cfg.limits_enabled !== undefined) {
+            isLimitsEnabled = cfg.limits_enabled;
+            updateLimitsModeHud(isLimitsEnabled);
           }
           if (cfg.vol !== undefined) {
             document.getElementById('volSlider').value = cfg.vol;
@@ -1942,7 +2024,7 @@ void processCommand(String cmd) {
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
     isCentering = false;
-    if (currentPositionMs > -steerLimitLeftMs) {
+    if (!steerLimitsEnabled || currentPositionMs > -steerLimitLeftMs) {
       stopSteering(); delay(30);
       currentSteerState = STEER_LEFT;
       lastSteerUpdateMs = millis();
@@ -1951,7 +2033,7 @@ void processCommand(String cmd) {
   }
   else if (cmd == "right" || cmd == "R" || cmd == "r" || cmd == "D" || cmd == "d") {
     isCentering = false;
-    if (currentPositionMs < steerLimitRightMs) {
+    if (!steerLimitsEnabled || currentPositionMs < steerLimitRightMs) {
       stopSteering(); delay(30);
       currentSteerState = STEER_RIGHT;
       lastSteerUpdateMs = millis();
@@ -2107,13 +2189,14 @@ void setup() {
   // 5. Load Persistent Speed, Steering Calibration Limits, Audio Volume, & Theme from Flash
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
-  steerLimitLeftMs = prefs.getLong("s_left", 600);
-  steerLimitRightMs = prefs.getLong("s_right", 600);
+  steerLimitLeftMs = prefs.getLong("s_left", 2500);
+  steerLimitRightMs = prefs.getLong("s_right", 2500);
+  steerLimitsEnabled = prefs.getBool("s_lim_en", true);
   audioVolumePercent = prefs.getInt("vol", 100);
   audioMuted = prefs.getBool("mute", false);
   currentSoundTheme = (SoundTheme)prefs.getInt("theme", 0);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, Vol=%d%%, Mute=%d, Theme=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, audioVolumePercent, audioMuted, (int)currentSoundTheme);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -2180,16 +2263,25 @@ void setup() {
 
   server.on("/set_steer_limits", []() {
     if (server.hasArg("left")) {
-      steerLimitLeftMs = constrain(server.arg("left").toInt(), 100, 3000);
+      steerLimitLeftMs = constrain(server.arg("left").toInt(), 100, 15000);
     }
     if (server.hasArg("right")) {
-      steerLimitRightMs = constrain(server.arg("right").toInt(), 100, 3000);
+      steerLimitRightMs = constrain(server.arg("right").toInt(), 100, 15000);
     }
     prefs.begin("tink_cfg", false);
     prefs.putLong("s_left", steerLimitLeftMs);
     prefs.putLong("s_right", steerLimitRightMs);
     prefs.end();
     server.send(200, "application/json", "{\"left\":" + String(steerLimitLeftMs) + ",\"right\":" + String(steerLimitRightMs) + "}");
+  });
+
+  server.on("/toggle_steer_limits", []() {
+    steerLimitsEnabled = !steerLimitsEnabled;
+    prefs.begin("tink_cfg", false);
+    prefs.putBool("s_lim_en", steerLimitsEnabled);
+    prefs.end();
+    Serial.printf("Steer Limits Toggled: %d\n", steerLimitsEnabled);
+    server.send(200, "application/json", "{\"limits_enabled\":" + String(steerLimitsEnabled ? "true" : "false") + "}");
   });
 
   server.on("/set_left_limit", []() {
@@ -2215,6 +2307,7 @@ void setup() {
     json += "\"speed\":" + String(driveSpeedPercent) + ",";
     json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
+    json += "\"limits_enabled\":" + String(steerLimitsEnabled ? "true" : "false") + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"theme\":" + String((int)currentSoundTheme) + ",";
@@ -2353,17 +2446,21 @@ void loop() {
          playSuccessChime();
      }
   } else {
-      if (currentSteerState == STEER_LEFT) {
-        updateSteeringPosition();
-        if (currentPositionMs <= -steerLimitLeftMs) {
-          stopSteering(); 
+      if (steerLimitsEnabled) {
+        if (currentSteerState == STEER_LEFT) {
+          updateSteeringPosition();
+          if (currentPositionMs <= -steerLimitLeftMs) {
+            stopSteering(); 
+          }
+        } 
+        else if (currentSteerState == STEER_RIGHT) {
+          updateSteeringPosition();
+          if (currentPositionMs >= steerLimitRightMs) {
+            stopSteering(); 
+          }
         }
-      } 
-      else if (currentSteerState == STEER_RIGHT) {
+      } else {
         updateSteeringPosition();
-        if (currentPositionMs >= steerLimitRightMs) {
-          stopSteering(); 
-        }
       }
   }
 }
