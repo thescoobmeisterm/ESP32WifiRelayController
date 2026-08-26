@@ -187,6 +187,13 @@ void playI2STone(uint32_t freq, uint32_t durationMs) {
   }
 }
 
+// --- Dynamic Racing Sound Synthesizer State Variables ---
+unsigned long lastAudioSliceMs = 0;
+double simEnginePhase = 0;
+double simDriftPhase = 0;
+unsigned long forwardCycleStartMs = 0;
+bool wasConnectedAudio = false;
+
 enum SoundTheme {
   THEME_SIMULATOR = 0, // V8 Muscle Simulator
   THEME_MARIO_KART = 1, // Classic Mario Kart (3-2-1-GO!, 150cc Kart, Hop Drift, Coin)
