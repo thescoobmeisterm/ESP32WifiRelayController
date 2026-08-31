@@ -726,68 +726,177 @@ const char* htmlPage = R"HTML(
     }
     
     .hud-header {
-      text-align: center;
-      margin-top: 5px;
+      width: 100%;
+      max-width: 360px;
+      margin-top: 4px;
+      margin-bottom: 6px;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       width: 100%;
     }
     .badge {
       display: inline-block;
       font-family: 'Orbitron', sans-serif;
-      font-size: 10px;
+      font-size: 9px;
       letter-spacing: 2px;
       color: #00f3ff;
       background: rgba(0, 243, 255, 0.1);
       border: 1px solid rgba(0, 243, 255, 0.3);
-      padding: 3px 10px;
+      padding: 2px 8px;
       border-radius: 4px;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
       text-transform: uppercase;
     }
     h1 {
       font-family: 'Orbitron', sans-serif;
-      font-size: 34px;
+      font-size: 28px;
       font-weight: 900;
       letter-spacing: 3px;
       color: #ffffff;
+      margin: 0;
+      line-height: 1.1;
       text-shadow: 0 0 15px rgba(0, 243, 255, 0.6);
     }
     .subtitle {
-      font-size: 11px;
-      letter-spacing: 2px;
+      font-size: 10px;
+      letter-spacing: 1.5px;
       color: #94a3b8;
       text-transform: uppercase;
     }
-
-    /* Tab Navigation Bar */
-    .tab-bar {
-      display: flex;
-      width: 100%;
-      max-width: 360px;
-      gap: 6px;
-      margin: 10px 0;
-    }
-    .tab-btn {
-      flex: 1;
+    .btn-gear {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1.5px solid #00f3ff;
+      color: #00f3ff;
       font-family: 'Orbitron', sans-serif;
       font-size: 11px;
       font-weight: 700;
-      padding: 10px 0;
-      color: #cbd5e1;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid #00f3ff;
+      padding: 8px 12px;
       border-radius: 8px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 0 12px rgba(0, 243, 255, 0.35);
+      transition: all 0.15s ease;
       text-transform: uppercase;
-      transition: all 0.2s ease;
     }
-    .tab-btn.active {
-      color: #07090e;
+    .btn-gear:active {
       background: #00f3ff;
-      box-shadow: 0 0 15px rgba(0, 243, 255, 0.6);
+      color: #07090e;
+      box-shadow: 0 0 22px rgba(0, 243, 255, 0.8);
+      transform: scale(0.95);
     }
 
-    /* Tab Views */
-    .tab-content {
+    /* Cockpit Layout Container */
+    .cockpit-container {
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* Modal Overlay for Settings */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(7, 9, 14, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 999;
+      display: none;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 12px 8px;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    .modal-overlay.active {
+      display: flex;
+      animation: modalFadeIn 0.2s ease-out;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .modal-content {
+      background: #0f172a;
+      border: 1px solid #38bdf8;
+      border-radius: 14px;
+      width: 100%;
+      max-width: 380px;
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(0, 243, 255, 0.25);
+      box-sizing: border-box;
+      margin: auto 0;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(0, 243, 255, 0.25);
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+    }
+    .modal-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 13px;
+      font-weight: 900;
+      color: #00f3ff;
+      letter-spacing: 1px;
+    }
+    .modal-close-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #ef4444;
+      font-family: 'Orbitron', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .modal-close-btn:active {
+      background: #ef4444;
+      color: #ffffff;
+    }
+    .settings-tab-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .settings-tab-btn {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 7px 2px;
+      color: #94a3b8;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid #334155;
+      border-radius: 6px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.15s ease;
+      text-align: center;
+    }
+    .settings-tab-btn.active {
+      color: #07090e;
+      background: #00f3ff;
+      border-color: #00f3ff;
+      box-shadow: 0 0 10px rgba(0, 243, 255, 0.5);
+    }
+    .settings-tab-pane {
+      display: none;
+      width: 100%;
+    }
+    .settings-tab-pane.active {
+      display: block;
+    }
       display: none;
       width: 100%;
       max-width: 360px;
@@ -1177,22 +1286,23 @@ const char* htmlPage = R"HTML(
 </head>
 <body>
 
-  <!-- Header -->
+  <!-- Header with Gear Settings Button -->
   <div class="hud-header">
-    <div class="badge">IGNITE ROBOTICS SYSTEM</div>
-    <h1>TINK</h1>
-    <div class="subtitle">InMoov Base Platform Controller</div>
+    <div class="header-row">
+      <div style="text-align:left;">
+        <div class="badge">IGNITE ROBOTICS</div>
+        <h1>TINK</h1>
+        <div class="subtitle">Base Cockpit</div>
+      </div>
+      <button class="btn-gear" onclick="openSettingsModal()">
+        ⚙️ SETTINGS
+      </button>
+    </div>
   </div>
 
-  <!-- Tab Navigation Bar -->
-  <div class="tab-bar">
-    <button class="tab-btn active" id="btnTab1" onclick="switchTab('tabControls', this)">🎮 Controls</button>
-    <button class="tab-btn" id="btnTab2" onclick="switchTab('tabWiring', this)">🔌 Wiring</button>
-    <button class="tab-btn" id="btnTab3" onclick="switchTab('tabMRL', this)">🤖 RobotLab</button>
-  </div>
-
-  <!-- TAB 1: CONTROLLER UI -->
-  <div class="tab-content active" id="tabControls">
+  <!-- MAIN COCKPIT: Clean, Streamlined Driving Page -->
+  <div class="cockpit-container">
+    <!-- Steering Section -->
     <div class="steering-section">
       <div class="wheel-wrapper" id="wheelWrapper">
         <svg class="steering-wheel-svg" viewBox="0 0 200 200">
@@ -1221,13 +1331,20 @@ const char* htmlPage = R"HTML(
       </div>
     </div>
 
-    <div class="throttle-section">
+    <!-- Steering Centering Quick Actions -->
+    <div class="utility-bar">
+      <button class="btn-util" onclick="sendCommand('center')">🎯 Recenter Steering (C)</button>
+      <button class="btn-util" onclick="sendCommand('set_center')">📍 Set Center (Z)</button>
+    </div>
+
+    <!-- Drive Throttle Controls -->
+    <div class="throttle-section" style="margin-top:10px;">
       <button class="btn-throttle btn-go" id="btnGo" onclick="setDrive('forward')">
         &#9650; GO / FORWARD (W)
       </button>
 
       <button class="btn-throttle btn-stop" id="btnStop" onclick="triggerStop()">
-        STOP / EMERGENCY (SPACE/X)
+        🛑 STOP / EMERGENCY (SPACE/X)
       </button>
 
       <button class="btn-throttle btn-back" id="btnBack" onclick="setDrive('back')">
@@ -1235,294 +1352,270 @@ const char* htmlPage = R"HTML(
       </button>
     </div>
 
-    <div class="utility-bar">
-      <button class="btn-util" onclick="sendCommand('center')">Center Steering (C)</button>
-      <button class="btn-util" onclick="sendCommand('set_center')">Set Center (Z)</button>
-    </div>
-
-    <!-- 1. DYNAMIC DRIVE SPEED GOVERNOR PANEL -->
+    <!-- 1. DRIVE SPEED GOVERNOR -->
     <div class="panel-card">
       <div class="panel-title">
-        <span>⚡ DRIVE SPEED GOVERNOR</span>
+        <span>⚡ DRIVE SPEED</span>
         <span id="speedLabel" style="color:#00ff88; font-size:12px; font-weight:900;">60% SPEED</span>
       </div>
       <input type="range" id="speedSlider" class="control-slider" min="20" max="100" value="60" oninput="onSpeedChange(this.value)">
-      <div style="display:flex; gap:6px; margin-top:6px;">
+      <div style="display:flex; gap:6px; margin-top:4px;">
         <button class="preset-btn" id="btnSpdSlow" onclick="setSpeedPreset(35)">🐢 SLOW (35%)</button>
         <button class="preset-btn active" id="btnSpdMed" onclick="setSpeedPreset(65)">🚗 CRUISE (65%)</button>
         <button class="preset-btn" id="btnSpdFast" onclick="setSpeedPreset(100)">⚡ TURBO (100%)</button>
       </div>
     </div>
 
-    <!-- DRIVE MOTOR HARDWARE DRIVER SELECTOR -->
+    <!-- 2. AUDIO VOLUME GOVERNOR -->
     <div class="panel-card">
       <div class="panel-title">
-        <span>⚙️ DRIVE MOTOR HARDWARE DRIVER</span>
-        <span id="driverLabel" style="color:#f59e0b; font-size:11px; font-weight:700;">🎛️ 4-CH RELAYS</span>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
-        <button class="preset-btn active" id="btnDriver0" onclick="setMotorDriver(0)">🎛️ 4-CH RELAYS</button>
-        <button class="preset-btn" id="btnDriver1" onclick="setMotorDriver(1)">⚡ L298N H-BRIDGE</button>
-      </div>
-      <div style="font-size:10px; color:#64748b; margin-top:4px; font-family:sans-serif;" id="driverDesc">
-        Mode: Relays (Time-Sliced Soft PWM on GPIO 4/5)
-      </div>
-    </div>
-
-    <!-- 2. STEERING TRAVEL LIMITS & MIN/MAX CALIBRATION PANEL -->
-    <div class="panel-card">
-      <div class="panel-title">
-        <span>📐 STEERING LIMITS & CALIBRATION</span>
-        <span id="posLabel" style="color:#38bdf8; font-size:11px;">POS: 0 ms</span>
-      </div>
-      
-      <!-- Live Steering Travel Bar -->
-      <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace;">
-        <span id="leftLimitDisplay">LEFT: -2500ms</span>
-        <span id="limitsModeLabel" style="color:#22c55e; font-weight:bold;">LIMITS: ACTIVE</span>
-        <span id="rightLimitDisplay">RIGHT: +2500ms</span>
-      </div>
-      <div class="pos-meter-track">
-        <div class="pos-meter-marker" id="posMarker" style="left:50%;"></div>
-      </div>
-
-      <!-- Limit Sliders -->
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
-        <div>
-          <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
-            <span>LEFT MAX LOCK</span>
-            <span id="leftValLabel">2500ms</span>
-          </div>
-          <input type="range" id="leftLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
-        </div>
-        <div>
-          <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
-            <span>RIGHT MAX LOCK</span>
-            <span id="rightValLabel">2500ms</span>
-          </div>
-          <input type="range" id="rightLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
-        </div>
-      </div>
-
-      <!-- Quick Travel Distance Presets -->
-      <div style="display:flex; gap:6px; margin-top:6px;">
-        <button class="preset-btn" onclick="setSteerPreset(1000)">1.0s</button>
-        <button class="preset-btn active" id="btnSteer25" onclick="setSteerPreset(2500)">2.5s</button>
-        <button class="preset-btn" id="btnSteer50" onclick="setSteerPreset(5000)">5.0s</button>
-        <button class="preset-btn" id="btnSteer100" onclick="setSteerPreset(10000)">10.0s</button>
-        <button class="preset-btn" onclick="adjustSteerLimits(1000)" style="color:#00f3ff;">+1.0s</button>
-      </div>
-
-      <!-- 1-Tap Calibration Locks & Free Steer Mode -->
-      <div style="display:flex; gap:6px; margin-top:8px;">
-        <button class="preset-btn" onclick="setLeftLimitNow()" style="color:#fcd34d; border-color:#f59e0b;">👈 LOCK LEFT</button>
-        <button class="preset-btn" onclick="sendCommand('set_center')" style="color:#00f3ff; border-color:#00f3ff;">🎯 ZERO CENTER</button>
-        <button class="preset-btn" onclick="setRightLimitNow()" style="color:#60a5fa; border-color:#3b82f6;">👉 LOCK RIGHT</button>
-        <button class="preset-btn" id="btnFreeSteer" onclick="toggleFreeSteer()" style="color:#ec4899; border-color:#ec4899;">🔓 FREE STEER</button>
-      </div>
-    </div>
-
-    <!-- 3. AUDIO & SOUND VOLUME GOVERNOR -->
-    <div class="panel-card">
-      <div class="panel-title">
-        <span>🔊 AUDIO VOLUME & MUTE</span>
+        <span>🔊 AUDIO VOLUME</span>
         <span id="volLabel" style="color:#22c55e; font-size:12px; font-weight:900;">100% VOLUME</span>
       </div>
       <input type="range" id="volSlider" class="control-slider" min="0" max="100" value="100" oninput="onVolumeChange(this.value)">
-      <div style="display:flex; gap:6px; margin-top:6px;">
+      <div style="display:flex; gap:6px; margin-top:4px;">
         <button class="preset-btn" id="btnMute" onclick="toggleMuteAudio()" style="color:#ef4444; border-color:#ef4444;">🔇 MUTE</button>
         <button class="preset-btn" onclick="setVolumePreset(50)">🔉 50%</button>
         <button class="preset-btn active" id="btnVol100" onclick="setVolumePreset(100)">🔊 100% BOOST</button>
       </div>
     </div>
 
-    <!-- 4. RACING SOUND THEME SELECTOR -->
-    <div class="panel-card">
-      <div class="panel-title">
-        <span>🎮 RACING SOUND THEME</span>
-        <span id="themeLabel" style="color:#00f3ff; font-size:11px; font-weight:700;">🏎️ V8 SIMULATOR</span>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
-        <button class="preset-btn active" id="btnTheme0" onclick="setSoundTheme(0)">🏎️ V8 SIM</button>
-        <button class="preset-btn" id="btnTheme1" onclick="setSoundTheme(1)">🍄 MARIO KART</button>
-        <button class="preset-btn" id="btnTheme2" onclick="setSoundTheme(2)">🛸 F-ZERO</button>
-        <button class="preset-btn" id="btnTheme3" onclick="setSoundTheme(3)">🌴 CRUIS'N USA</button>
-      </div>
+    <!-- Active Hardware Badges -->
+    <div style="display:flex; justify-content:space-between; width:100%; margin-top:10px; font-size:9px; font-family:'Orbitron',sans-serif; color:#94a3b8;">
+      <span id="mainThemeBadge" onclick="openSettingsTab('paneThemes')" style="color:#00f3ff; background:rgba(0,243,255,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(0,243,255,0.3); cursor:pointer;">🏎️ V8 SIM</span>
+      <span id="mainDriverBadge" onclick="openSettingsTab('paneDriver')" style="color:#f59e0b; background:rgba(245,158,11,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(245,158,11,0.3); cursor:pointer;">🎛️ RELAYS</span>
+      <span id="mainLimitsBadge" onclick="openSettingsTab('paneSteering')" style="color:#22c55e; background:rgba(34,197,94,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(34,197,94,0.3); cursor:pointer;">LIMITS: ACTIVE</span>
     </div>
 
-    <!-- Wireless Gamepad Pairing & Auto-Connect Bar -->
-    <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
-      <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0; flex:1;">
-        🎮 PAIR CONTROLLER
-      </button>
-      <button class="btn-util" onclick="forgetGamepad()" style="border-color:#ef4444; color:#ef4444; font-weight:bold; padding:10px 0; max-width:90px;">
-        FORGET
-      </button>
-    </div>
-
-    <div id="pairStatus" style="font-size:10px; color:#94a3b8; margin-top:4px; font-family:'Orbitron',sans-serif; text-align:center;">
-      STANDALONE AUTO-RECONNECT ACTIVE: TURN ON CONTROLLER TO DRIVE!
-    </div>
-
-    <!-- LIVE GPIO PIN DIAGNOSTICS HUD -->
-    <div style="width:100%; margin-top:12px;">
-      <div style="font-family:'Orbitron',sans-serif; font-size:11px; color:#00f3ff; font-weight:700; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
-        <span>⚡ LIVE GPIO SIGNAL MONITOR</span>
-        <span style="font-size:9px; color:#64748b;">MULTIMETER DIAGNOSTICS</span>
-      </div>
-
-      <div class="pin-grid">
-        <!-- GPIO 4: Forward -->
-        <div class="pin-card" id="cardPin4">
-          <div class="pin-header">
-            <span>GPIO 4 [IN1]</span>
-            <span class="pin-state-badge" id="badgePin4">0.0V (OFF)</span>
-          </div>
-          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Forward Drive</div>
-          <div class="pin-expected" id="expPin4">Signal: 0.0V (DISENGAGED)</div>
-        </div>
-
-        <!-- GPIO 5: Reverse -->
-        <div class="pin-card" id="cardPin5">
-          <div class="pin-header">
-            <span>GPIO 5 [IN2]</span>
-            <span class="pin-state-badge" id="badgePin5">0.0V (OFF)</span>
-          </div>
-          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Reverse Drive</div>
-          <div class="pin-expected" id="expPin5">Signal: 0.0V (DISENGAGED)</div>
-        </div>
-
-        <!-- GPIO 6: Steer Left -->
-        <div class="pin-card" id="cardPin6">
-          <div class="pin-header">
-            <span>GPIO 6 [IN3]</span>
-            <span class="pin-state-badge" id="badgePin6">0.0V (OFF)</span>
-          </div>
-          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Left</div>
-          <div class="pin-expected" id="expPin6">Signal: 0.0V (DISENGAGED)</div>
-        </div>
-
-        <!-- GPIO 7: Steer Right -->
-        <div class="pin-card" id="cardPin7">
-          <div class="pin-header">
-            <span>GPIO 7 [IN4]</span>
-            <span class="pin-state-badge" id="badgePin7">0.0V (OFF)</span>
-          </div>
-          <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Right</div>
-          <div class="pin-expected" id="expPin7">Signal: 0.0V (DISENGAGED)</div>
-        </div>
-      </div>
+    <!-- Telemetry Status -->
+    <div class="telemetry" style="margin-top:10px;">
+      <span class="status-dot"></span>
+      <span id="cockpitPairStatus">SYSTEM ONLINE // WIRELESS AUTO-CONNECT ACTIVE</span>
     </div>
   </div>
 
-  <!-- TAB 2: WIRING SPECS & DIAGRAM -->
-  <div class="tab-content" id="tabWiring">
-    <div class="doc-card">
-      <h3>ESP32-S3 PINOUT TABLE</h3>
-      <table class="doc-table">
-        <tr><th>ESP32 Pin</th><th>Target Module</th><th>Target Function</th></tr>
-        <tr><td><code>GPIO 4</code></td><td>IN1 Relay</td><td>Drive Forward (6V)</td></tr>
-        <tr><td><code>GPIO 5</code></td><td>IN2 Relay</td><td>Drive Backward (6V)</td></tr>
-        <tr><td><code>GPIO 6</code></td><td>IN3 Relay</td><td>Steer Left (12V)</td></tr>
-        <tr><td><code>GPIO 7</code></td><td>IN4 Relay</td><td>Steer Right (12V)</td></tr>
-        <tr><td><code>GPIO 18</code></td><td>MAX98357A DIN</td><td>I2S Audio Data</td></tr>
-        <tr><td><code>GPIO 17</code></td><td>MAX98357A BCLK</td><td>I2S Bit Clock</td></tr>
-        <tr><td><code>GPIO 16</code></td><td>MAX98357A LRC</td><td>I2S Word Select Clock</td></tr>
-        <tr><td><code>VIN / 5V</code></td><td>VCC</td><td>Relay & Amp Power</td></tr>
-        <tr><td><code>GND</code></td><td>GND</td><td>Common Ground</td></tr>
-      </table>
+  <!-- ⚙️ SETTINGS MODAL OVERLAY -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title">⚙️ VEHICLE SETTINGS</div>
+        <button class="modal-close-btn" onclick="closeSettingsModal()">✖ CLOSE</button>
+      </div>
+
+      <!-- Settings Sub-Tabs -->
+      <div class="settings-tab-bar">
+        <button class="settings-tab-btn active" id="stabSteer" onclick="switchSettingsPane('paneSteering', this)">📐 Steering</button>
+        <button class="settings-tab-btn" id="stabDriver" onclick="switchSettingsPane('paneDriver', this)">⚙️ Driver</button>
+        <button class="settings-tab-btn" id="stabThemes" onclick="switchSettingsPane('paneThemes', this)">🎮 Themes</button>
+        <button class="settings-tab-btn" id="stabGamepad" onclick="switchSettingsPane('paneGamepad', this)">📡 Gamepad</button>
+        <button class="settings-tab-btn" id="stabDiag" onclick="switchSettingsPane('paneDiag', this)">⚡ Multimeter</button>
+        <button class="settings-tab-btn" id="stabWiring" onclick="switchSettingsPane('paneWiring', this)">🔌 Wiring</button>
+      </div>
+
+      <!-- PANE 1: STEERING LIMITS & CALIBRATION -->
+      <div class="settings-tab-pane active" id="paneSteering">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>📐 STEERING LIMITS & CALIBRATION</span>
+            <span id="posLabel" style="color:#38bdf8; font-size:11px;">POS: 0 ms</span>
+          </div>
+          
+          <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace;">
+            <span id="leftLimitDisplay">LEFT: -2500ms</span>
+            <span id="limitsModeLabel" style="color:#22c55e; font-weight:bold;">LIMITS: ACTIVE</span>
+            <span id="rightLimitDisplay">RIGHT: +2500ms</span>
+          </div>
+          <div class="pos-meter-track">
+            <div class="pos-meter-marker" id="posMarker" style="left:50%;"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
+                <span>LEFT MAX LOCK</span>
+                <span id="leftValLabel">2500ms</span>
+              </div>
+              <input type="range" id="leftLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
+                <span>RIGHT MAX LOCK</span>
+                <span id="rightValLabel">2500ms</span>
+              </div>
+              <input type="range" id="rightLimitSlider" class="control-slider" min="100" max="10000" step="50" value="2500" oninput="onSteerLimitsChange()">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:4px; margin-top:6px;">
+            <button class="preset-btn" onclick="setSteerPreset(1000)">1.0s</button>
+            <button class="preset-btn active" id="btnSteer25" onclick="setSteerPreset(2500)">2.5s</button>
+            <button class="preset-btn" id="btnSteer50" onclick="setSteerPreset(5000)">5.0s</button>
+            <button class="preset-btn" id="btnSteer100" onclick="setSteerPreset(10000)">10.0s</button>
+            <button class="preset-btn" onclick="adjustSteerLimits(1000)" style="color:#00f3ff;">+1.0s</button>
+          </div>
+
+          <div style="display:flex; gap:6px; margin-top:8px;">
+            <button class="preset-btn" onclick="setLeftLimitNow()" style="color:#fcd34d; border-color:#f59e0b;">👈 LOCK LEFT</button>
+            <button class="preset-btn" onclick="sendCommand('set_center')" style="color:#00f3ff; border-color:#00f3ff;">🎯 ZERO CENTER</button>
+            <button class="preset-btn" onclick="setRightLimitNow()" style="color:#60a5fa; border-color:#3b82f6;">👉 LOCK RIGHT</button>
+            <button class="preset-btn" id="btnFreeSteer" onclick="toggleFreeSteer()" style="color:#ec4899; border-color:#ec4899;">🔓 FREE STEER</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 2: MOTOR HARDWARE DRIVER -->
+      <div class="settings-tab-pane" id="paneDriver">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>⚙️ DRIVE MOTOR HARDWARE DRIVER</span>
+            <span id="driverLabel" style="color:#f59e0b; font-size:11px; font-weight:700;">🎛️ 4-CH RELAYS</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+            <button class="preset-btn active" id="btnDriver0" onclick="setMotorDriver(0)">🎛️ 4-CH RELAYS</button>
+            <button class="preset-btn" id="btnDriver1" onclick="setMotorDriver(1)">⚡ L298N H-BRIDGE</button>
+          </div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:sans-serif;" id="driverDesc">
+            Mode: Relays (Time-Sliced Soft PWM on GPIO 4/5)
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 3: SOUND THEMES -->
+      <div class="settings-tab-pane" id="paneThemes">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>🎮 RACING SOUND THEMES</span>
+            <span id="themeLabel" style="color:#00f3ff; font-size:11px; font-weight:700;">🏎️ V8 SIMULATOR</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+            <button class="preset-btn active" id="btnTheme0" onclick="setSoundTheme(0)">🏎️ V8 SIM</button>
+            <button class="preset-btn" id="btnTheme1" onclick="setSoundTheme(1)">🍄 MARIO KART</button>
+            <button class="preset-btn" id="btnTheme2" onclick="setSoundTheme(2)">🛸 F-ZERO</button>
+            <button class="preset-btn" id="btnTheme3" onclick="setSoundTheme(3)">🌴 CRUIS'N USA</button>
+          </div>
+          <div style="font-size:10px; color:#64748b; margin-top:6px;">
+            Select a theme to play its signature startup fanfare and dynamic engine harmonics!
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 4: GAMEPAD PAIRING -->
+      <div class="settings-tab-pane" id="paneGamepad">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>📡 CONTROLLER PAIRING</span>
+          </div>
+          <div style="display:flex; gap:8px; width:100%; margin-top:6px;">
+            <button class="btn-util" onclick="triggerBleScan()" style="border-color:#00f3ff; color:#00f3ff; font-weight:bold; padding:10px 0; flex:1;">
+              🎮 PAIR CONTROLLER
+            </button>
+            <button class="btn-util" onclick="forgetGamepad()" style="border-color:#ef4444; color:#ef4444; font-weight:bold; padding:10px 0; max-width:90px;">
+              FORGET
+            </button>
+          </div>
+          <div id="pairStatus" style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:'Orbitron',sans-serif; text-align:center;">
+            STANDALONE AUTO-RECONNECT ACTIVE: TURN ON CONTROLLER TO DRIVE!
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 5: MULTIMETER DIAGNOSTICS -->
+      <div class="settings-tab-pane" id="paneDiag">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>⚡ LIVE GPIO SIGNAL MONITOR</span>
+          </div>
+          <div class="pin-grid">
+            <!-- GPIO 4: Forward -->
+            <div class="pin-card" id="cardPin4">
+              <div class="pin-header">
+                <span>GPIO 4 [IN1]</span>
+                <span class="pin-state-badge" id="badgePin4">0.0V (OFF)</span>
+              </div>
+              <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Forward Drive</div>
+              <div class="pin-expected" id="expPin4">Signal: 0.0V (DISENGAGED)</div>
+            </div>
+
+            <!-- GPIO 5: Reverse -->
+            <div class="pin-card" id="cardPin5">
+              <div class="pin-header">
+                <span>GPIO 5 [IN2]</span>
+                <span class="pin-state-badge" id="badgePin5">0.0V (OFF)</span>
+              </div>
+              <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Reverse Drive</div>
+              <div class="pin-expected" id="expPin5">Signal: 0.0V (DISENGAGED)</div>
+            </div>
+
+            <!-- GPIO 6: Steer Left -->
+            <div class="pin-card" id="cardPin6">
+              <div class="pin-header">
+                <span>GPIO 6 [IN3]</span>
+                <span class="pin-state-badge" id="badgePin6">0.0V (OFF)</span>
+              </div>
+              <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Left</div>
+              <div class="pin-expected" id="expPin6">Signal: 0.0V (DISENGAGED)</div>
+            </div>
+
+            <!-- GPIO 7: Steer Right -->
+            <div class="pin-card" id="cardPin7">
+              <div class="pin-header">
+                <span>GPIO 7 [IN4]</span>
+                <span class="pin-state-badge" id="badgePin7">0.0V (OFF)</span>
+              </div>
+              <div style="font-size:11px; font-weight:bold; color:#f8fafc;">Steer Right</div>
+              <div class="pin-expected" id="expPin7">Signal: 0.0V (DISENGAGED)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 6: WIRING & ROBOTLAB GUIDE -->
+      <div class="settings-tab-pane" id="paneWiring">
+        <div class="doc-card" style="margin-top:0;">
+          <h3>ESP32-S3 PINOUT TABLE</h3>
+          <table class="doc-table">
+            <tr><th>ESP32 Pin</th><th>Target Module</th><th>Function</th></tr>
+            <tr><td><code>GPIO 4</code></td><td>IN1 Relay / L298N</td><td>Drive Forward (PWM)</td></tr>
+            <tr><td><code>GPIO 5</code></td><td>IN2 Relay / L298N</td><td>Drive Reverse (PWM)</td></tr>
+            <tr><td><code>GPIO 6</code></td><td>IN3 Relay / L298N</td><td>Steer Left</td></tr>
+            <tr><td><code>GPIO 7</code></td><td>IN4 Relay / L298N</td><td>Steer Right</td></tr>
+            <tr><td><code>GPIO 18</code></td><td>MAX98357A DIN</td><td>I2S Audio Data</td></tr>
+            <tr><td><code>GPIO 17</code></td><td>MAX98357A BCLK</td><td>I2S Bit Clock</td></tr>
+            <tr><td><code>GPIO 16</code></td><td>MAX98357A LRC</td><td>I2S Word Select</td></tr>
+            <tr><td><code>5V / VIN</code></td><td>VCC</td><td>Power Rail (3.2W Amp)</td></tr>
+            <tr><td><code>GND</code></td><td>GND</td><td>Common Ground</td></tr>
+          </table>
+        </div>
+
+        <div class="doc-card">
+          <h3>⚡ L298N DUAL H-BRIDGE MOTOR WIRING</h3>
+          <p style="font-size:11px; color:#cbd5e1; line-height:1.4;">
+            • <b>IN1</b> ➔ <code>GPIO 4</code> (Forward PWM Speed Control)<br>
+            • <b>IN2</b> ➔ <code>GPIO 5</code> (Reverse PWM Speed Control)<br>
+            • <b>ENA</b> ➔ Keep 5V Jumper ON<br>
+            • <b>+12V / VCC</b> ➔ Drive Battery Positive (+6V to +12V)<br>
+            • <b>GND</b> ➔ Battery Negative & ESP32 GND (Common Ground)<br>
+            • <b>OUT1 & OUT2</b> ➔ Drive DC Motor Terminals (+ / -)<br>
+          </p>
+        </div>
+
+        <div class="doc-card">
+          <h3>H-BRIDGE & RELAY WIRING</h3>
+          <p style="font-size:11px; color:#cbd5e1; line-height:1.4;">
+            • <b>Relays 1 & 2 (Drive 6V):</b> COM ➔ Motor A/B. NOs = +6V, NCs = Ground.<br>
+            • <b>Relays 3 & 4 (Steering 12V):</b> COM ➔ Actuator. NOs = +12V, NCs = Ground.<br>
+            <span style="color:#ef4444;">⚠️ Common Ground required across ESP32, 6V, 12V, and Amp.</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Done Button in Modal -->
+      <div style="margin-top:14px;">
+        <button class="btn-util" onclick="closeSettingsModal()" style="border-color:#22c55e; color:#22c55e; font-weight:bold; width:100%; padding:10px 0;">
+          ✓ DONE / CLOSE SETTINGS
+        </button>
+      </div>
     </div>
-
-    <div class="doc-card">
-      <h3>🔊 MAX98357A I2S AUDIO AMP WIRING & HARDWARE GAIN BOOST</h3>
-      <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
-        <b>MAX98357A Pinout to ESP32-S3:</b><br>
-        • <b>DIN</b> ➔ <code>GPIO 18</code> (I2S Data)<br>
-        • <b>BCLK</b> ➔ <code>GPIO 17</code> (I2S Bit Clock)<br>
-        • <b>LRC</b> ➔ <code>GPIO 16</code> (I2S Word Select)<br>
-        • <b>VIN</b> ➔ <code>5V / VIN</code> (Powering from 5V provides 3.2 Watts vs <1W on 3.3V!)<br>
-        • <b>GND</b> ➔ <code>ESP32 GND</code><br><br>
-        <b>🚀 Hardware Analog Volume Boost Settings (GAIN Pin):</b><br>
-        • <b>Default (Floating):</b> 9dB gain<br>
-        • <b>GAIN ➔ GND directly:</b> 12dB gain (+3dB louder)<br>
-        • <b>GAIN ➔ GND through 100kΩ resistor:</b> 15dB gain (+6dB MAXIMUM BOOST!)<br>
-      </p>
-    </div>
-
-    <div class="doc-card">
-      <h3>H-BRIDGE & RELAY WIRING</h3>
-      <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
-        <b>Relay 1 & 2 (Drive 6V):</b><br>
-        Relay 1 COM & Relay 2 COM connect to Motor Terminals A & B.<br>
-        Relay NOs = +6V. Relay NCs = Ground.<br><br>
-        <b>Relay 3 & 4 (Actuator 12V):</b><br>
-        Relay 3 COM & Relay 4 COM connect to Actuator Terminals.<br>
-        Relay NOs = +12V. Relay NCs = Ground.<br><br>
-        <span style="color:#ef4444;">⚠️ COMMON GROUND REQUIRED: Connect ESP32 GND, Amp GND, 6V GND, and 12V GND together.</span>
-      </p>
-    </div>
-
-    <div class="doc-card">
-      <h3>⚡ L298N DUAL H-BRIDGE MOTOR DRIVER WIRING (SOLID STATE PWM)</h3>
-      <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
-        <b>L298N Logic Connections to ESP32-S3:</b><br>
-        • <b>IN1</b> ➔ <code>GPIO 4</code> (Forward PWM Speed Control)<br>
-        • <b>IN2</b> ➔ <code>GPIO 5</code> (Reverse PWM Speed Control)<br>
-        • <b>ENA (Enable A)</b> ➔ Keep 5V Jumper ON (or remove jumper and connect to 3.3V/5V)<br>
-        • <b>GND</b> ➔ <code>ESP32 GND</code> (Common Ground)<br><br>
-        <b>L298N Power & Motor Terminals:</b><br>
-        • <b>+12V / VCC Screw Terminal</b> ➔ Drive Battery Positive (+6V to +12V)<br>
-        • <b>GND Screw Terminal</b> ➔ Drive Battery Negative (GND) & ESP32 GND<br>
-        • <b>OUT1 & OUT2 Screw Terminals</b> ➔ Drive DC Motor Terminals (+ / -)<br><br>
-        <span style="color:#00ff88;">💡 Benefit: Pure solid-state variable speed with 0dB silent operation and high torque!</span>
-      </p>
-    </div>
-  </div>
-
-  <!-- TAB 3: MYROBOTLAB GUIDE -->
-  <div class="tab-content" id="tabMRL">
-    <div class="doc-card">
-      <h3>MYROBOTLAB BLE / SERIAL SETUP</h3>
-      <p style="font-size:12px; color:#cbd5e1; line-height:1.4;">
-        TINK supports WASD, single-letter, and word commands via Serial USB (115200) and BLE.<br><br>
-        <b>BLE Name:</b> <code>TINK_Base_Platform</code><br>
-        <b>BLE Service UUID:</b><br><code>6E400001-B5A3-F393-E0A9-E50E24DCCA9E</code>
-      </p>
-    </div>
-
-    <div class="doc-card">
-      <h3>MRL PYTHON SCRIPT</h3>
-      <pre># MyRobotLab Python Script (WASD / Arrows Supported)
-serial = runtime.start("serial", "Serial")
-serial.connect("COM9", 115200)
-
-# Movement Commands:
-serial.write("W\n") # Drive Forward
-serial.write("S\n") # Reverse
-serial.write("A\n") # Steer Left
-serial.write("D\n") # Steer Right
-serial.write("X\n") # Emergency Stop
-serial.write("C\n") # Auto-Center Steering</pre>
-    </div>
-
-    <div class="doc-card">
-      <h3>COMMAND REFERENCE CHART</h3>
-      <table class="doc-table">
-        <tr><th>WASD / Keys</th><th>Single / Full</th><th>Action</th></tr>
-        <tr><td><code>W</code> / <code>↑</code></td><td><code>F</code> / <code>forward</code></td><td>Sticky Drive Forward</td></tr>
-        <tr><td><code>S</code> / <code>↓</code></td><td><code>B</code> / <code>back</code></td><td>Sticky Drive Reverse</td></tr>
-        <tr><td><code>A</code> / <code>←</code></td><td><code>L</code> / <code>left</code></td><td>Steer Left</td></tr>
-        <tr><td><code>D</code> / <code>→</code></td><td><code>R</code> / <code>right</code></td><td>Steer Right</td></tr>
-        <tr><td><code>Space</code> / <code>X</code></td><td><code>S</code> / <code>stop</code></td><td>Emergency Stop All</td></tr>
-        <tr><td><code>C</code></td><td><code>center</code></td><td>Auto-Center Steering</td></tr>
-      </table>
-    </div>
-  </div>
-
-  <!-- Telemetry Status -->
-  <div class="telemetry">
-    <span class="status-dot"></span>
-    <span>SYSTEM ONLINE // LIVE MULTIMETER PIN MONITOR ACTIVE</span>
   </div>
 
   <script>
@@ -1530,11 +1623,34 @@ serial.write("C\n") # Auto-Center Steering</pre>
     const btnGo = document.getElementById('btnGo');
     const btnBack = document.getElementById('btnBack');
 
-    const switchTab = (tabId, btn) => {
-      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-      document.getElementById(tabId).classList.add('active');
-      btn.classList.add('active');
+    const openSettingsModal = () => {
+      document.getElementById('settingsModal').classList.add('active');
+    };
+
+    const closeSettingsModal = () => {
+      document.getElementById('settingsModal').classList.remove('active');
+    };
+
+    const switchSettingsPane = (paneId, btn) => {
+      document.querySelectorAll('.settings-tab-pane').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.settings-tab-btn').forEach(el => el.classList.remove('active'));
+      const p = document.getElementById(paneId);
+      if (p) p.classList.add('active');
+      if (btn) btn.classList.add('active');
+    };
+
+    const openSettingsTab = (paneId) => {
+      openSettingsModal();
+      const btnMap = {
+        'paneSteering': 'stabSteer',
+        'paneDriver': 'stabDriver',
+        'paneThemes': 'stabThemes',
+        'paneGamepad': 'stabGamepad',
+        'paneDiag': 'stabDiag',
+        'paneWiring': 'stabWiring'
+      };
+      const b = document.getElementById(btnMap[paneId]);
+      switchSettingsPane(paneId, b);
     };
 
     const updatePinHud = (pinNum, isOn) => {
@@ -1662,17 +1778,15 @@ serial.write("C\n") # Auto-Center Steering</pre>
     const updateLimitsModeHud = (enabled) => {
       const lbl = document.getElementById('limitsModeLabel');
       const btn = document.getElementById('btnFreeSteer');
-      if (!lbl || !btn) return;
+      const badge = document.getElementById('mainLimitsBadge');
       if (enabled) {
-        lbl.innerText = 'LIMITS: ACTIVE';
-        lbl.style.color = '#22c55e';
-        btn.classList.remove('active');
-        btn.innerText = '🔓 FREE STEER';
+        if (lbl) { lbl.innerText = 'LIMITS: ACTIVE'; lbl.style.color = '#22c55e'; }
+        if (btn) { btn.classList.remove('active'); btn.innerText = '🔓 FREE STEER'; }
+        if (badge) { badge.innerText = 'LIMITS: ACTIVE'; badge.style.color = '#22c55e'; }
       } else {
-        lbl.innerText = 'LIMITS: UNRESTRICTED';
-        lbl.style.color = '#ec4899';
-        btn.classList.add('active');
-        btn.innerText = '🔒 RESTRICT';
+        if (lbl) { lbl.innerText = 'LIMITS: UNRESTRICTED'; lbl.style.color = '#ec4899'; }
+        if (btn) { btn.classList.add('active'); btn.innerText = '🔒 RESTRICT'; }
+        if (badge) { badge.innerText = 'LIMITS: FREE'; badge.style.color = '#ec4899'; }
       }
     };
 
@@ -1706,10 +1820,14 @@ serial.write("C\n") # Auto-Center Steering</pre>
         });
     };
 
-    const themeNames = ['🏎️ V8 SIMULATOR', '🍄 MARIO KART', '🛸 F-ZERO', '🌴 CRUIS\'N USA'];
+    const themeNames = ['🏎️ V8 SIM', '🍄 MARIO KART', '🛸 F-ZERO', '🌴 CRUIS\'N USA'];
     const updateThemeButtons = (id) => {
       id = parseInt(id);
-      document.getElementById('themeLabel').innerText = themeNames[id] || '🏎️ V8 SIMULATOR';
+      const name = themeNames[id] || '🏎️ V8 SIM';
+      const lbl = document.getElementById('themeLabel');
+      const badge = document.getElementById('mainThemeBadge');
+      if (lbl) lbl.innerText = name;
+      if (badge) badge.innerText = name;
       for (let i = 0; i < 4; i++) {
         const b = document.getElementById('btnTheme' + i);
         if (b) b.classList.toggle('active', i === id);
@@ -1728,9 +1846,14 @@ serial.write("C\n") # Auto-Center Steering</pre>
       const b0 = document.getElementById('btnDriver0');
       const b1 = document.getElementById('btnDriver1');
       const desc = document.getElementById('driverDesc');
+      const badge = document.getElementById('mainDriverBadge');
       if (lbl) {
         lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
         lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
+      }
+      if (badge) {
+        badge.innerText = isL298N ? '⚡ L298N' : '🎛️ RELAYS';
+        badge.style.color = isL298N ? '#00ff88' : '#f59e0b';
       }
       if (b0) b0.classList.toggle('active', !isL298N);
       if (b1) b1.classList.toggle('active', isL298N);
@@ -1816,19 +1939,19 @@ serial.write("C\n") # Auto-Center Steering</pre>
     let scanPollTimer = null;
     const triggerBleScan = () => {
       const statusEl = document.getElementById('pairStatus');
-      statusEl.innerText = '🔍 SCANNING FOR WIRELESS CONTROLLER (10s)...';
-      statusEl.style.color = '#00f3ff';
+      const cockpitEl = document.getElementById('cockpitPairStatus');
+      if (statusEl) { statusEl.innerText = '🔍 SCANNING FOR WIRELESS CONTROLLER (10s)...'; statusEl.style.color = '#00f3ff'; }
+      if (cockpitEl) { cockpitEl.innerText = '🔍 SCANNING FOR WIRELESS CONTROLLER (10s)...'; }
       fetch('/scan_ble')
         .then(res => res.text())
         .then(msg => {
-          statusEl.innerText = msg;
-          statusEl.style.color = '#00f3ff';
+          if (statusEl) { statusEl.innerText = msg; statusEl.style.color = '#00f3ff'; }
+          if (cockpitEl) { cockpitEl.innerText = msg; }
           if (scanPollTimer) clearInterval(scanPollTimer);
           scanPollTimer = setInterval(pollBleStatus, 750);
         })
         .catch(err => {
-          statusEl.innerText = 'SCAN ERROR: ' + err;
-          statusEl.style.color = '#ef4444';
+          if (statusEl) { statusEl.innerText = 'SCAN ERROR: ' + err; statusEl.style.color = '#ef4444'; }
         });
     };
 
@@ -1837,16 +1960,18 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .then(r => r.json())
         .then(data => {
           const statusEl = document.getElementById('pairStatus');
+          const cockpitEl = document.getElementById('cockpitPairStatus');
           if (data.status) {
-            statusEl.innerText = data.status;
+            if (statusEl) statusEl.innerText = data.status;
+            if (cockpitEl) cockpitEl.innerText = data.status;
             if (data.connected && data.connected.length > 0) {
-              statusEl.style.color = '#00ff88';
+              if (statusEl) statusEl.style.color = '#00ff88';
               if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
             } else if (!data.scanning) {
-              statusEl.style.color = '#cbd5e1';
+              if (statusEl) statusEl.style.color = '#cbd5e1';
               if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
             } else {
-              statusEl.style.color = '#00f3ff';
+              if (statusEl) statusEl.style.color = '#00f3ff';
             }
           }
         })
@@ -1858,8 +1983,10 @@ serial.write("C\n") # Auto-Center Steering</pre>
         .then(r => r.text())
         .then(() => {
           const statusEl = document.getElementById('pairStatus');
-          statusEl.innerText = 'CONTROLLER FORGOTTEN. PUT NEW CONTROLLER IN PAIRING MODE!';
-          statusEl.style.color = '#f59e0b';
+          const cockpitEl = document.getElementById('cockpitPairStatus');
+          const msg = 'CONTROLLER FORGOTTEN. PUT NEW CONTROLLER IN PAIRING MODE!';
+          if (statusEl) { statusEl.innerText = msg; statusEl.style.color = '#f59e0b'; }
+          if (cockpitEl) { cockpitEl.innerText = msg; }
         });
     };
 
