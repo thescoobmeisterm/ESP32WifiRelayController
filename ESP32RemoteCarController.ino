@@ -19,6 +19,12 @@ const int pinBack    = 5;  // IN2 Relay
 const int pinLeft    = 6;  // IN3 Relay
 const int pinRight   = 7;  // IN4 Relay
 
+// Dual HC-SR04 Ultrasonic Collision Avoidance Pins
+const int pinTrigFront = 8;   // Front Sonar Trigger (3.3V out to HC-SR04)
+const int pinEchoFront = 9;   // Front Sonar Echo (5V in from HC-SR04 via resistor/divider)
+const int pinTrigBack  = 10;  // Back Sonar Trigger (3.3V out to HC-SR04)
+const int pinEchoBack  = 11;  // Back Sonar Echo (5V in from HC-SR04 via resistor/divider)
+
 // MAX98357A I2S Digital Amplifier Pins
 #define I2S_NUM         I2S_NUM_0
 #define I2S_BCLK_PIN    17 // Bit Clock
@@ -89,14 +95,30 @@ long currentPositionMs = 0;
 // --- Motor Hardware Driver Mode ---
 enum MotorDriverType { DRIVER_RELAY = 0, DRIVER_L298N = 1 };
 MotorDriverType driveMotorDriver = DRIVER_RELAY; // Default: Relay Module (or L298N)
+MotorDriverType steerMotorDriver = DRIVER_RELAY; // Default: Relay Module (or L298N for variable speed steering)
 
-// --- Configurable Drive Speed & Steering Calibration Limits ---
+// --- Configurable Drive Speed, Steer Speed & Calibration Limits ---
 int driveSpeedPercent = 60;          // Default drive throttle: 60% (Range: 20% to 100%)
+int steerSpeedPercent = 75;          // Default steer speed: 75% (Range: 25% to 100%)
 long steerLimitLeftMs = 2500;        // Max Left steering lock travel in ms (Range: 100ms - 15000ms)
 long steerLimitRightMs = 2500;       // Max Right steering lock travel in ms (Range: 100ms - 15000ms)
 bool steerLimitsEnabled = true;      // If false, unrestricted continuous steering is enabled
 unsigned long lastSteerUpdateMs = 0;
 bool isCentering = false;
+bool isAutoHoming = false;
+unsigned long autoHomeStartMs = 0;
+long autoHomeDurationMs = 3500;
+
+// --- HC-SR04 Dual Ultrasonic Collision Avoidance Variables ---
+bool collisionAvoidanceEnabled = true; // Master toggle (Persistent in Flash NVS)
+int collisionThresholdCm = 30;         // Sensitivity distance in cm (10cm - 100cm, default 30cm)
+int frontDistanceCm = -1;              // -1 = Clear / out of range
+int backDistanceCm  = -1;              // -1 = Clear / out of range
+bool frontBlocked = false;
+bool backBlocked  = false;
+unsigned long lastSonarPollMs = 0;
+uint8_t sonarPollCycle = 0;            // 0 = Ping Front, 1 = Ping Back (Interleaved)
+unsigned long lastCollisionAlertToneMs = 0;
 
 // Non-blocking Animation & LED variables
 unsigned long lastBlinkMs = 0;
@@ -115,11 +137,18 @@ const unsigned long FAILSAFE_TIMEOUT_MS = 3000; // 3 seconds connection timeout
 // Function declarations
 void stopDriving();
 void stopSteering();
+void startSteeringLeft();
+void startSteeringRight();
+void startAutoHoming();
+void handleAutoHomingLoop();
 void stopAll();
 void processCommand(String cmd);
+void triggerSetCenterFlash();
 void playBootChime();
 void playSuccessChime();
 void playStopBeep();
+void playCollisionAlertTone();
+void updateSonarCollisionCheck();
 void startBleGamepadScan();
 void initI2SAudio();
 void playI2STone(uint32_t freq, uint32_t durationMs);
@@ -866,7 +895,7 @@ const char* htmlPage = R"HTML(
     }
     .settings-tab-bar {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
       gap: 4px;
       margin-bottom: 12px;
     }
@@ -1337,6 +1366,12 @@ const char* htmlPage = R"HTML(
       <button class="btn-util" onclick="sendCommand('set_center')">📍 Set Center (Z)</button>
     </div>
 
+    <!-- Obstacle Hazard Warning Banner (Active Collision Alert) -->
+    <div id="obstacleBanner" style="display:none; width:100%; margin-top:8px; padding:8px 10px; background:rgba(239,68,68,0.25); border:1px solid #ef4444; border-radius:8px; box-shadow:0 0 15px rgba(239,68,68,0.5); text-align:center; box-sizing:border-box;">
+      <div id="obstacleBannerTitle" style="font-family:'Orbitron',sans-serif; font-size:11px; font-weight:900; color:#ef4444; letter-spacing:1px;">⚠️ COLLISION HAZARD</div>
+      <div id="obstacleBannerDesc" style="font-size:10px; color:#fca5a5; margin-top:2px;">Forward drive inhibited</div>
+    </div>
+
     <!-- Drive Throttle Controls -->
     <div class="throttle-section" style="margin-top:10px;">
       <button class="btn-throttle btn-go" id="btnGo" onclick="setDrive('forward')">
@@ -1381,10 +1416,11 @@ const char* htmlPage = R"HTML(
     </div>
 
     <!-- Active Hardware Badges -->
-    <div style="display:flex; justify-content:space-between; width:100%; margin-top:10px; font-size:9px; font-family:'Orbitron',sans-serif; color:#94a3b8;">
-      <span id="mainThemeBadge" onclick="openSettingsTab('paneThemes')" style="color:#00f3ff; background:rgba(0,243,255,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(0,243,255,0.3); cursor:pointer;">🏎️ V8 SIM</span>
-      <span id="mainDriverBadge" onclick="openSettingsTab('paneDriver')" style="color:#f59e0b; background:rgba(245,158,11,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(245,158,11,0.3); cursor:pointer;">🎛️ RELAYS</span>
-      <span id="mainLimitsBadge" onclick="openSettingsTab('paneSteering')" style="color:#22c55e; background:rgba(34,197,94,0.1); padding:3px 6px; border-radius:4px; border:1px solid rgba(34,197,94,0.3); cursor:pointer;">LIMITS: ACTIVE</span>
+    <div style="display:flex; justify-content:space-between; width:100%; margin-top:10px; font-size:9px; font-family:'Orbitron',sans-serif; color:#94a3b8; gap:4px;">
+      <span id="mainThemeBadge" onclick="openSettingsTab('paneThemes')" style="flex:1; text-align:center; color:#00f3ff; background:rgba(0,243,255,0.1); padding:3px 4px; border-radius:4px; border:1px solid rgba(0,243,255,0.3); cursor:pointer;">🏎️ V8 SIM</span>
+      <span id="mainDriverBadge" onclick="openSettingsTab('paneDriver')" style="flex:1; text-align:center; color:#f59e0b; background:rgba(245,158,11,0.1); padding:3px 4px; border-radius:4px; border:1px solid rgba(245,158,11,0.3); cursor:pointer;">🎛️ RELAYS</span>
+      <span id="mainSensorsBadge" onclick="openSettingsTab('paneSensors')" style="flex:1; text-align:center; color:#22c55e; background:rgba(34,197,94,0.1); padding:3px 4px; border-radius:4px; border:1px solid rgba(34,197,94,0.3); cursor:pointer;">🛡️ SENSORS: 30cm</span>
+      <span id="mainLimitsBadge" onclick="openSettingsTab('paneSteering')" style="flex:1; text-align:center; color:#38bdf8; background:rgba(56,189,248,0.1); padding:3px 4px; border-radius:4px; border:1px solid rgba(56,189,248,0.3); cursor:pointer;">LIMITS: ACTIVE</span>
     </div>
 
     <!-- Telemetry Status -->
@@ -1407,12 +1443,13 @@ const char* htmlPage = R"HTML(
         <button class="settings-tab-btn active" id="stabSteer" onclick="switchSettingsPane('paneSteering', this)">📐 Steering</button>
         <button class="settings-tab-btn" id="stabDriver" onclick="switchSettingsPane('paneDriver', this)">⚙️ Driver</button>
         <button class="settings-tab-btn" id="stabThemes" onclick="switchSettingsPane('paneThemes', this)">🎮 Themes</button>
+        <button class="settings-tab-btn" id="stabSensors" onclick="switchSettingsPane('paneSensors', this)">🛡️ Sensors</button>
         <button class="settings-tab-btn" id="stabGamepad" onclick="switchSettingsPane('paneGamepad', this)">📡 Gamepad</button>
         <button class="settings-tab-btn" id="stabDiag" onclick="switchSettingsPane('paneDiag', this)">⚡ Multimeter</button>
         <button class="settings-tab-btn" id="stabWiring" onclick="switchSettingsPane('paneWiring', this)">🔌 Wiring</button>
       </div>
 
-      <!-- PANE 1: STEERING LIMITS & CALIBRATION -->
+      <!-- PANE 1: STEERING LIMITS, SPEED & CALIBRATION -->
       <div class="settings-tab-pane active" id="paneSteering">
         <div class="panel-card" style="margin-top:0;">
           <div class="panel-title">
@@ -1427,6 +1464,20 @@ const char* htmlPage = R"HTML(
           </div>
           <div class="pos-meter-track">
             <div class="pos-meter-marker" id="posMarker" style="left:50%;"></div>
+          </div>
+
+          <!-- Variable Steering Speed Governor (L298N PWM Scaling) -->
+          <div style="margin-top:10px; padding-top:8px; border-top:1px solid #1e293b;">
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#94a3b8; font-weight:bold;">
+              <span>⚡ TURNING SPEED (L298N PWM)</span>
+              <span id="steerSpeedLabel" style="color:#00ff88; font-weight:900;">75% SPEED</span>
+            </div>
+            <input type="range" id="steerSpeedSlider" class="control-slider" min="25" max="100" value="75" oninput="onSteerSpeedChange(this.value)">
+            <div style="display:flex; gap:4px; margin-top:4px;">
+              <button class="preset-btn" id="btnStrSpdSlow" onclick="setSteerSpeedPreset(35)">🐢 35% Precision</button>
+              <button class="preset-btn active" id="btnStrSpdMed" onclick="setSteerSpeedPreset(65)">🚗 65% Normal</button>
+              <button class="preset-btn" id="btnStrSpdFast" onclick="setSteerSpeedPreset(100)">⚡ 100% Quick</button>
+            </div>
           </div>
 
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
@@ -1460,14 +1511,22 @@ const char* htmlPage = R"HTML(
             <button class="preset-btn" onclick="setRightLimitNow()" style="color:#60a5fa; border-color:#3b82f6;">👉 LOCK RIGHT</button>
             <button class="preset-btn" id="btnFreeSteer" onclick="toggleFreeSteer()" style="color:#ec4899; border-color:#ec4899;">🔓 FREE STEER</button>
           </div>
+
+          <!-- 1-Tap Auto-Homing / Calibration -->
+          <div style="margin-top:8px;">
+            <button class="preset-btn" id="btnAutoHome" onclick="triggerAutoHome()" style="width:100%; padding:9px 0; font-size:10px; color:#ec4899; border-color:#ec4899;">
+              🏠 AUTO-CALIBRATE TO HARD LIMIT (Zero Drift & Recenter)
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- PANE 2: MOTOR HARDWARE DRIVER -->
+      <!-- PANE 2: MOTOR HARDWARE DRIVERS -->
       <div class="settings-tab-pane" id="paneDriver">
+        <!-- Drive Motor Driver Card -->
         <div class="panel-card" style="margin-top:0;">
           <div class="panel-title">
-            <span>⚙️ DRIVE MOTOR HARDWARE DRIVER</span>
+            <span>⚙️ DRIVE MOTOR DRIVER</span>
             <span id="driverLabel" style="color:#f59e0b; font-size:11px; font-weight:700;">🎛️ 4-CH RELAYS</span>
           </div>
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
@@ -1476,6 +1535,21 @@ const char* htmlPage = R"HTML(
           </div>
           <div style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:sans-serif;" id="driverDesc">
             Mode: Relays (Time-Sliced Soft PWM on GPIO 4/5)
+          </div>
+        </div>
+
+        <!-- Steering Motor Driver Card -->
+        <div class="panel-card" style="margin-top:10px;">
+          <div class="panel-title">
+            <span>⚙️ STEERING ACTUATOR DRIVER</span>
+            <span id="steerDriverLabel" style="color:#f59e0b; font-size:11px; font-weight:700;">🎛️ 4-CH RELAYS</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+            <button class="preset-btn active" id="btnSteerDriver0" onclick="setSteerMotorDriver(0)">🎛️ 4-CH RELAYS</button>
+            <button class="preset-btn" id="btnSteerDriver1" onclick="setSteerMotorDriver(1)">⚡ L298N H-BRIDGE</button>
+          </div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:sans-serif;" id="steerDriverDesc">
+            Mode: Relays (Digital ON/OFF on GPIO 6/7)
           </div>
         </div>
       </div>
@@ -1495,6 +1569,61 @@ const char* htmlPage = R"HTML(
           </div>
           <div style="font-size:10px; color:#64748b; margin-top:6px;">
             Select a theme to play its signature startup fanfare and dynamic engine harmonics!
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 4: DUAL HC-SR04 COLLISION AVOIDANCE SENSORS -->
+      <div class="settings-tab-pane" id="paneSensors">
+        <div class="panel-card" style="margin-top:0;">
+          <div class="panel-title">
+            <span>🛡️ COLLISION AVOIDANCE SENSORS</span>
+            <span id="sonarStatusLabel" style="color:#22c55e; font-size:11px; font-weight:700;">ACTIVE</span>
+          </div>
+
+          <!-- Master Toggle Button -->
+          <div style="margin-top:6px;">
+            <button class="preset-btn active" id="btnSonarToggle" onclick="toggleCollisionAvoidance()" style="width:100%; padding:10px 0; font-size:11px; border-color:#22c55e; color:#22c55e;">
+              🛡️ COLLISION AVOIDANCE: ACTIVE
+            </button>
+          </div>
+
+          <!-- Dual Live Sonar Radar Readouts -->
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
+            <!-- Front Sensor -->
+            <div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:8px; text-align:center;" id="sonarBoxFront">
+              <div style="font-size:10px; font-weight:bold; color:#38bdf8;">▲ FRONT SENSOR</div>
+              <div id="frontDistVal" style="font-family:'Orbitron',sans-serif; font-size:16px; font-weight:900; color:#22c55e; margin:4px 0;">CLEAR</div>
+              <div id="frontDistSub" style="font-size:9px; color:#64748b;">(No obstacle)</div>
+            </div>
+
+            <!-- Rear Sensor -->
+            <div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:8px; text-align:center;" id="sonarBoxBack">
+              <div style="font-size:10px; font-weight:bold; color:#f59e0b;">▼ REAR SENSOR</div>
+              <div id="backDistVal" style="font-family:'Orbitron',sans-serif; font-size:16px; font-weight:900; color:#22c55e; margin:4px 0;">CLEAR</div>
+              <div id="backDistSub" style="font-size:9px; color:#64748b;">(No obstacle)</div>
+            </div>
+          </div>
+
+          <!-- Sensitivity / Stop Distance Slider -->
+          <div style="margin-top:12px;">
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; font-weight:bold;">
+              <span>STOP SENSITIVITY DISTANCE</span>
+              <span id="sonarDistLabel" style="color:#00f3ff;">30 cm (12 in)</span>
+            </div>
+            <input type="range" id="sonarDistSlider" class="control-slider" min="10" max="100" step="5" value="30" oninput="onCollisionDistChange(this.value)">
+          </div>
+
+          <!-- 1-Tap Sensitivity Presets -->
+          <div style="display:flex; gap:4px; margin-top:6px;">
+            <button class="preset-btn" id="btnSon15" onclick="setCollisionDistPreset(15)">15cm (Close)</button>
+            <button class="preset-btn active" id="btnSon30" onclick="setCollisionDistPreset(30)">30cm (Normal)</button>
+            <button class="preset-btn" id="btnSon50" onclick="setCollisionDistPreset(50)">50cm (Cautious)</button>
+            <button class="preset-btn" id="btnSon75" onclick="setCollisionDistPreset(75)">75cm (Far)</button>
+          </div>
+
+          <div style="font-size:9px; color:#64748b; margin-top:8px; line-height:1.4;">
+            💡 When an obstacle enters the stop zone, drive in that direction is automatically disengaged and prevented. Steering and opposite drive remain active to navigate away.
           </div>
         </div>
       </div>
@@ -1579,12 +1708,33 @@ const char* htmlPage = R"HTML(
             <tr><td><code>GPIO 5</code></td><td>IN2 Relay / L298N</td><td>Drive Reverse (PWM)</td></tr>
             <tr><td><code>GPIO 6</code></td><td>IN3 Relay / L298N</td><td>Steer Left</td></tr>
             <tr><td><code>GPIO 7</code></td><td>IN4 Relay / L298N</td><td>Steer Right</td></tr>
+            <tr><td><code>GPIO 8</code></td><td>Front HC-SR04 TRIG</td><td>Front Sonar Trigger (3.3V)</td></tr>
+            <tr><td><code>GPIO 9</code></td><td>Front HC-SR04 ECHO</td><td>Front Sonar Echo (via Resistor)</td></tr>
+            <tr><td><code>GPIO 10</code></td><td>Back HC-SR04 TRIG</td><td>Rear Sonar Trigger (3.3V)</td></tr>
+            <tr><td><code>GPIO 11</code></td><td>Back HC-SR04 ECHO</td><td>Rear Sonar Echo (via Resistor)</td></tr>
             <tr><td><code>GPIO 18</code></td><td>MAX98357A DIN</td><td>I2S Audio Data</td></tr>
             <tr><td><code>GPIO 17</code></td><td>MAX98357A BCLK</td><td>I2S Bit Clock</td></tr>
             <tr><td><code>GPIO 16</code></td><td>MAX98357A LRC</td><td>I2S Word Select</td></tr>
-            <tr><td><code>5V / VIN</code></td><td>VCC</td><td>Power Rail (3.2W Amp)</td></tr>
-            <tr><td><code>GND</code></td><td>GND</td><td>Common Ground</td></tr>
+            <tr><td><code>5V / VIN</code></td><td>VCC (All Modules)</td><td>5V Power Rail (Amp & Sensors)</td></tr>
+            <tr><td><code>GND</code></td><td>GND (All Modules)</td><td>Shared Common Ground</td></tr>
           </table>
+        </div>
+
+        <div class="doc-card">
+          <h3>🛡️ DUAL HC-SR04 ULTRASONIC SENSOR WIRING</h3>
+          <p style="font-size:11px; color:#cbd5e1; line-height:1.4;">
+            <b>Front Sensor Connections:</b><br>
+            • <b>VCC</b> ➔ <code>5V / VIN</code> (HC-SR04 requires 5V power)<br>
+            • <b>GND</b> ➔ <code>ESP32 GND</code> (Common Ground)<br>
+            • <b>TRIG</b> ➔ <code>GPIO 8</code> (Direct connection)<br>
+            • <b>ECHO</b> ➔ <code>GPIO 9</code> (via 1kΩ series resistor or 1kΩ/2kΩ divider)<br><br>
+            <b>Rear / Back Sensor Connections:</b><br>
+            • <b>VCC</b> ➔ <code>5V / VIN</code><br>
+            • <b>GND</b> ➔ <code>ESP32 GND</code><br>
+            • <b>TRIG</b> ➔ <code>GPIO 10</code> (Direct connection)<br>
+            • <b>ECHO</b> ➔ <code>GPIO 11</code> (via 1kΩ series resistor or 1kΩ/2kΩ divider)<br><br>
+            <span style="color:#00ff88;">⚡ 3.3V Protection Tip:</span> Standard HC-SR04 echo pins output 5V. Placing a 1kΩ resistor in line protects the ESP32 input. 3.3V models (HC-SR04P/RCWL-9610) can connect directly.
+          </p>
         </div>
 
         <div class="doc-card">
@@ -1645,6 +1795,7 @@ const char* htmlPage = R"HTML(
         'paneSteering': 'stabSteer',
         'paneDriver': 'stabDriver',
         'paneThemes': 'stabThemes',
+        'paneSensors': 'stabSensors',
         'paneGamepad': 'stabGamepad',
         'paneDiag': 'stabDiag',
         'paneWiring': 'stabWiring'
@@ -1839,6 +1990,71 @@ const char* htmlPage = R"HTML(
       fetch('/set_theme?val=' + id);
     };
 
+    const onSteerSpeedChange = (val) => {
+      document.getElementById('steerSpeedLabel').innerText = val + '% SPEED';
+      updateSteerSpeedPresetButtons(val);
+      fetch('/set_steer_speed?val=' + val);
+    };
+
+    const setSteerSpeedPreset = (val) => {
+      document.getElementById('steerSpeedSlider').value = val;
+      onSteerSpeedChange(val);
+    };
+
+    const updateSteerSpeedPresetButtons = (val) => {
+      val = parseInt(val);
+      const bSlow = document.getElementById('btnStrSpdSlow');
+      const bMed = document.getElementById('btnStrSpdMed');
+      const bFast = document.getElementById('btnStrSpdFast');
+      if (bSlow) bSlow.classList.toggle('active', val <= 40);
+      if (bMed) bMed.classList.toggle('active', val > 40 && val < 85);
+      if (bFast) bFast.classList.toggle('active', val >= 85);
+    };
+
+    const updateSteerMotorDriverHud = (id) => {
+      id = parseInt(id);
+      const isL298N = (id === 1);
+      const lbl = document.getElementById('steerDriverLabel');
+      const b0 = document.getElementById('btnSteerDriver0');
+      const b1 = document.getElementById('btnSteerDriver1');
+      const desc = document.getElementById('steerDriverDesc');
+      if (lbl) {
+        lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
+        lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
+      }
+      if (b0) b0.classList.toggle('active', !isL298N);
+      if (b1) b1.classList.toggle('active', isL298N);
+      if (desc) {
+        desc.innerText = isL298N ? 
+          'Mode: L298N Hardware PWM (Smooth & Variable Turning Speed on GPIO 6/7)' : 
+          'Mode: 4-Channel Relays (Digital ON/OFF on GPIO 6/7)';
+      }
+    };
+
+    const setSteerMotorDriver = (id) => {
+      updateSteerMotorDriverHud(id);
+      fetch('/set_steer_driver?val=' + id);
+    };
+
+    const triggerAutoHome = () => {
+      const btn = document.getElementById('btnAutoHome');
+      if (btn) {
+        btn.innerText = '⏳ HOMING TO HARD LIMIT...';
+        btn.style.color = '#00f3ff';
+        btn.style.borderColor = '#00f3ff';
+      }
+      fetch('/auto_home')
+        .then(() => {
+          setTimeout(() => {
+            if (btn) {
+              btn.innerText = '🏠 AUTO-CALIBRATE TO HARD LIMIT (Zero Drift & Recenter)';
+              btn.style.color = '#ec4899';
+              btn.style.borderColor = '#ec4899';
+            }
+          }, 4000);
+        });
+    };
+
     const updateMotorDriverHud = (id) => {
       id = parseInt(id);
       const isL298N = (id === 1);
@@ -1869,6 +2085,157 @@ const char* htmlPage = R"HTML(
       fetch('/set_driver?val=' + id);
     };
 
+    let isSonarEnabled = true;
+    let sonarThresholdDist = 30;
+
+    const updateSonarHud = (d) => {
+      if (d.sonar_en !== undefined) {
+        isSonarEnabled = d.sonar_en;
+        const btn = document.getElementById('btnSonarToggle');
+        const stat = document.getElementById('sonarStatusLabel');
+        const badge = document.getElementById('mainSensorsBadge');
+        if (btn) {
+          btn.classList.toggle('active', isSonarEnabled);
+          btn.innerText = isSonarEnabled ? '🛡️ COLLISION AVOIDANCE: ACTIVE' : '🛡️ COLLISION AVOIDANCE: DISABLED';
+          btn.style.borderColor = isSonarEnabled ? '#22c55e' : '#64748b';
+          btn.style.color = isSonarEnabled ? '#22c55e' : '#64748b';
+        }
+        if (stat) {
+          stat.innerText = isSonarEnabled ? 'ACTIVE' : 'OFF';
+          stat.style.color = isSonarEnabled ? '#22c55e' : '#64748b';
+        }
+        if (badge && !isSonarEnabled) {
+          badge.innerText = '🛡️ SENSORS: OFF';
+          badge.style.color = '#94a3b8';
+          badge.style.borderColor = 'rgba(148,163,184,0.3)';
+          badge.style.background = 'rgba(148,163,184,0.1)';
+        }
+      }
+
+      if (d.sonar_dist !== undefined) {
+        sonarThresholdDist = d.sonar_dist;
+        const slider = document.getElementById('sonarDistSlider');
+        const lbl = document.getElementById('sonarDistLabel');
+        if (slider) slider.value = sonarThresholdDist;
+        if (lbl) {
+          const inch = Math.round(sonarThresholdDist / 2.54);
+          lbl.innerText = sonarThresholdDist + ' cm (' + inch + ' in)';
+        }
+        updateSonarPresetButtons(sonarThresholdDist);
+      }
+
+      // Live Distance Readouts & Radar Boxes
+      const fVal = document.getElementById('frontDistVal');
+      const fSub = document.getElementById('frontDistSub');
+      const fBox = document.getElementById('sonarBoxFront');
+      if (fVal && d.front_cm !== undefined) {
+        if (d.front_cm > 0) {
+          fVal.innerText = d.front_cm + ' cm';
+          if (d.front_blk) {
+            fVal.style.color = '#ef4444';
+            if (fSub) fSub.innerText = '⚠️ OBSTACLE DETECTED!';
+            if (fBox) fBox.style.borderColor = '#ef4444';
+          } else {
+            fVal.style.color = '#22c55e';
+            if (fSub) fSub.innerText = '(Clear)';
+            if (fBox) fBox.style.borderColor = '#334155';
+          }
+        } else {
+          fVal.innerText = 'CLEAR';
+          fVal.style.color = '#38bdf8';
+          if (fSub) fSub.innerText = '(No obstacle)';
+          if (fBox) fBox.style.borderColor = '#334155';
+        }
+      }
+
+      const bVal = document.getElementById('backDistVal');
+      const bSub = document.getElementById('backDistSub');
+      const bBox = document.getElementById('sonarBoxBack');
+      if (bVal && d.back_cm !== undefined) {
+        if (d.back_cm > 0) {
+          bVal.innerText = d.back_cm + ' cm';
+          if (d.back_blk) {
+            bVal.style.color = '#ef4444';
+            if (bSub) bSub.innerText = '⚠️ OBSTACLE DETECTED!';
+            if (bBox) bBox.style.borderColor = '#ef4444';
+          } else {
+            bVal.style.color = '#22c55e';
+            if (bSub) bSub.innerText = '(Clear)';
+            if (bBox) bBox.style.borderColor = '#334155';
+          }
+        } else {
+          bVal.innerText = 'CLEAR';
+          bVal.style.color = '#38bdf8';
+          if (bSub) bSub.innerText = '(No obstacle)';
+          if (bBox) bBox.style.borderColor = '#334155';
+        }
+      }
+
+      // Directional Hazard Warning Banner in Main Cockpit
+      const banner = document.getElementById('obstacleBanner');
+      const bTitle = document.getElementById('obstacleBannerTitle');
+      const bDesc = document.getElementById('obstacleBannerDesc');
+      const badge = document.getElementById('mainSensorsBadge');
+      if (banner && isSonarEnabled) {
+        if (d.front_blk && d.back_blk) {
+          banner.style.display = 'block';
+          bTitle.innerText = '⚠️ FRONT & REAR HAZARD (' + d.front_cm + 'cm / ' + d.back_cm + 'cm)';
+          bDesc.innerText = 'Both forward and reverse throttles inhibited';
+          if (badge) { badge.innerText = '⚠️ BLOCKED: ' + Math.min(d.front_cm, d.back_cm) + 'cm'; badge.style.color = '#ef4444'; }
+        } else if (d.front_blk) {
+          banner.style.display = 'block';
+          bTitle.innerText = '⚠️ FRONT HAZARD DETECTED (' + d.front_cm + ' cm)';
+          bDesc.innerText = 'Forward drive inhibited // Reverse (S) & Steer are clear';
+          if (badge) { badge.innerText = '⚠️ FRONT: ' + d.front_cm + 'cm'; badge.style.color = '#ef4444'; }
+        } else if (d.back_blk) {
+          banner.style.display = 'block';
+          bTitle.innerText = '⚠️ REAR HAZARD DETECTED (' + d.back_cm + ' cm)';
+          bDesc.innerText = 'Reverse drive inhibited // Forward (W) & Steer are clear';
+          if (badge) { badge.innerText = '⚠️ REAR: ' + d.back_cm + 'cm'; badge.style.color = '#ef4444'; }
+        } else {
+          banner.style.display = 'none';
+          if (badge) {
+            badge.innerText = '🛡️ SENSORS: ' + sonarThresholdDist + 'cm';
+            badge.style.color = '#22c55e';
+            badge.style.borderColor = 'rgba(34,197,94,0.3)';
+            badge.style.background = 'rgba(34,197,94,0.1)';
+          }
+        }
+      } else if (banner) {
+        banner.style.display = 'none';
+      }
+    };
+
+    const toggleCollisionAvoidance = () => {
+      fetch('/toggle_collision')
+        .then(r => r.json())
+        .then(d => {
+          updateSonarHud(d);
+        });
+    };
+
+    const onCollisionDistChange = (val) => {
+      val = parseInt(val);
+      const inch = Math.round(val / 2.54);
+      document.getElementById('sonarDistLabel').innerText = val + ' cm (' + inch + ' in)';
+      updateSonarPresetButtons(val);
+      fetch('/set_collision_dist?val=' + val);
+    };
+
+    const setCollisionDistPreset = (val) => {
+      document.getElementById('sonarDistSlider').value = val;
+      onCollisionDistChange(val);
+    };
+
+    const updateSonarPresetButtons = (val) => {
+      val = parseInt(val);
+      const presets = [15, 30, 50, 75];
+      for (let p of presets) {
+        const b = document.getElementById('btnSon' + p);
+        if (b) b.classList.toggle('active', Math.abs(val - p) <= 5);
+      }
+    };
+
     const fetchConfig = () => {
       fetch('/get_config')
         .then(r => r.json())
@@ -1878,8 +2245,16 @@ const char* htmlPage = R"HTML(
             document.getElementById('speedLabel').innerText = cfg.speed + '% SPEED';
             updateSpeedPresetButtons(cfg.speed);
           }
+          if (cfg.steer_speed) {
+            document.getElementById('steerSpeedSlider').value = cfg.steer_speed;
+            document.getElementById('steerSpeedLabel').innerText = cfg.steer_speed + '% SPEED';
+            updateSteerSpeedPresetButtons(cfg.steer_speed);
+          }
           if (cfg.driver !== undefined) {
             updateMotorDriverHud(cfg.driver);
+          }
+          if (cfg.steer_driver !== undefined) {
+            updateSteerMotorDriverHud(cfg.steer_driver);
           }
           if (cfg.steer_left) {
             const s = document.getElementById('leftLimitSlider');
@@ -1913,6 +2288,9 @@ const char* htmlPage = R"HTML(
           if (cfg.pos !== undefined) {
             updateSteerMeter(cfg.pos);
           }
+          if (cfg.sonar_en !== undefined || cfg.sonar_dist !== undefined) {
+            updateSonarHud(cfg);
+          }
         })
         .catch(() => {});
     };
@@ -1928,6 +2306,12 @@ const char* htmlPage = R"HTML(
           updatePinHud(7, d.pin7 === 'ON');
           if (d.pos !== undefined) {
             updateSteerMeter(d.pos);
+          }
+          if (d.sonar_en !== undefined) {
+            updateSonarHud(d);
+          }
+          if (d.steer_driver !== undefined) {
+            updateSteerMotorDriverHud(d.steer_driver);
           }
         })
         .catch(() => {});
@@ -2153,11 +2537,16 @@ void stopDriving() {
 void updateSteeringPosition() {
   unsigned long now = millis();
   long delta = now - lastSteerUpdateMs;
-  
-  if (currentSteerState == STEER_LEFT) {
-    currentPositionMs -= delta;
-  } else if (currentSteerState == STEER_RIGHT) {
-    currentPositionMs += delta;
+  if (delta > 0) {
+    long effectiveDelta = delta;
+    if (steerMotorDriver == DRIVER_L298N) {
+      effectiveDelta = (delta * steerSpeedPercent) / 100;
+    }
+    if (currentSteerState == STEER_LEFT) {
+      currentPositionMs -= effectiveDelta;
+    } else if (currentSteerState == STEER_RIGHT) {
+      currentPositionMs += effectiveDelta;
+    }
   }
   lastSteerUpdateMs = now;
 }
@@ -2166,15 +2555,70 @@ void stopSteering() {
   if (currentSteerState != STEER_IDLE) {
      updateSteeringPosition();
   }
-  setRelayOff(pinLeft);
-  setRelayOff(pinRight);
+  if (steerMotorDriver == DRIVER_L298N) {
+    analogWrite(pinLeft, 0);
+    analogWrite(pinRight, 0);
+  } else {
+    setRelayOff(pinLeft);
+    setRelayOff(pinRight);
+  }
   currentSteerState = STEER_IDLE;
+}
+
+void startSteeringLeft() {
+  stopSteering(); delay(20);
+  currentSteerState = STEER_LEFT;
+  lastSteerUpdateMs = millis();
+  if (steerMotorDriver == DRIVER_L298N) {
+    int pwmVal = map(steerSpeedPercent, 0, 100, 0, 255);
+    analogWrite(pinRight, 0);
+    analogWrite(pinLeft, pwmVal);
+  } else {
+    setRelayOn(pinLeft);
+  }
+}
+
+void startSteeringRight() {
+  stopSteering(); delay(20);
+  currentSteerState = STEER_RIGHT;
+  lastSteerUpdateMs = millis();
+  if (steerMotorDriver == DRIVER_L298N) {
+    int pwmVal = map(steerSpeedPercent, 0, 100, 0, 255);
+    analogWrite(pinLeft, 0);
+    analogWrite(pinRight, pwmVal);
+  } else {
+    setRelayOn(pinRight);
+  }
+}
+
+void startAutoHoming() {
+  isAutoHoming = true;
+  isCentering = false;
+  autoHomeStartMs = millis();
+  autoHomeDurationMs = max(3500L, steerLimitLeftMs + 1000L);
+  startSteeringLeft(); // Drive toward the physical hardware limit switch
+  Serial.printf("🎯 AUTO-HOMING STARTED: Driving to hard limit for %ld ms...\n", autoHomeDurationMs);
+}
+
+void handleAutoHomingLoop() {
+  if (!isAutoHoming) return;
+  unsigned long elapsed = millis() - autoHomeStartMs;
+  if (elapsed >= autoHomeDurationMs) {
+    // Reached physical limit switch!
+    stopSteering();
+    isAutoHoming = false;
+    currentPositionMs = -steerLimitLeftMs; // Calibrated to known limit position
+    Serial.println("🎯 HARD LIMIT REACHED! Recalibrated position. Centering now...");
+    triggerSetCenterFlash();
+    isCentering = true; // Automatically center steering from the known home!
+  }
 }
 
 void stopAll() {
   stopDriving();
   stopSteering();
   isCentering = false;
+  isAutoHoming = false;
   playStopBeep();
 }
 
@@ -2192,6 +2636,76 @@ void playStopBeep() {
   playI2STone(220, 150); delay(50);
 }
 
+void playCollisionAlertTone() {
+  if (millis() - lastCollisionAlertToneMs > 350) {
+    lastCollisionAlertToneMs = millis();
+    playI2STone(880, 70);
+    delay(25);
+    playI2STone(440, 90);
+  }
+}
+
+void updateSonarCollisionCheck() {
+  unsigned long now = millis();
+  if (now - lastSonarPollMs < 70) return; // 70ms between interleaved pings
+  lastSonarPollMs = now;
+
+  if (!collisionAvoidanceEnabled) {
+    frontBlocked = false;
+    backBlocked = false;
+    frontDistanceCm = -1;
+    backDistanceCm = -1;
+    return;
+  }
+
+  if (sonarPollCycle == 0) {
+    // Interleaved Ping 1: Front HC-SR04
+    digitalWrite(pinTrigFront, LOW);
+    delayMicroseconds(2);
+    digitalWrite(pinTrigFront, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(pinTrigFront, LOW);
+    unsigned long duration = pulseIn(pinEchoFront, HIGH, 12000); // 12ms max (~205cm)
+    if (duration > 0) {
+      frontDistanceCm = (int)(duration * 0.0343 / 2.0);
+      frontBlocked = (frontDistanceCm > 0 && frontDistanceCm <= collisionThresholdCm);
+    } else {
+      frontDistanceCm = -1;
+      frontBlocked = false;
+    }
+    sonarPollCycle = 1;
+  } else {
+    // Interleaved Ping 2: Back HC-SR04
+    digitalWrite(pinTrigBack, LOW);
+    delayMicroseconds(2);
+    digitalWrite(pinTrigBack, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(pinTrigBack, LOW);
+    unsigned long duration = pulseIn(pinEchoBack, HIGH, 12000); // 12ms max (~205cm)
+    if (duration > 0) {
+      backDistanceCm = (int)(duration * 0.0343 / 2.0);
+      backBlocked = (backDistanceCm > 0 && backDistanceCm <= collisionThresholdCm);
+    } else {
+      backDistanceCm = -1;
+      backBlocked = false;
+    }
+    sonarPollCycle = 0;
+  }
+
+  // Active Emergency Braking if traveling toward an obstacle
+  if (currentDriveState == DRIVE_FORWARD && frontBlocked) {
+    stopDriving();
+    playCollisionAlertTone();
+    setLedColor(255, 0, 0); // Warning Red
+    Serial.printf("⚠️ EMERGENCY BRAKE: Front Obstacle at %d cm!\n", frontDistanceCm);
+  } else if (currentDriveState == DRIVE_BACK && backBlocked) {
+    stopDriving();
+    playCollisionAlertTone();
+    setLedColor(255, 0, 0); // Warning Red
+    Serial.printf("⚠️ EMERGENCY BRAKE: Rear Obstacle at %d cm!\n", backDistanceCm);
+  }
+}
+
 void triggerSetCenterFlash() {
   playSuccessChime();
   for (int i = 0; i < 3; i++) {
@@ -2207,6 +2721,12 @@ void processCommand(String cmd) {
   lastHeartbeatMs = millis(); // Refresh heartbeat on every command
 
   if (cmd == "forward" || cmd == "F" || cmd == "f" || cmd == "W" || cmd == "w") {
+    if (collisionAvoidanceEnabled && frontBlocked) {
+      playCollisionAlertTone();
+      setLedColor(255, 60, 0); // Amber Warning
+      Serial.printf("⚠️ FORWARD INHIBITED: Front Obstacle at %d cm!\n", frontDistanceCm);
+      return;
+    }
     stopDriving(); delay(20);
     currentDriveState = DRIVE_FORWARD;
     forwardCycleStartMs = millis();
@@ -2219,6 +2739,12 @@ void processCommand(String cmd) {
     }
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
+    if (collisionAvoidanceEnabled && backBlocked) {
+      playCollisionAlertTone();
+      setLedColor(255, 60, 0); // Amber Warning
+      Serial.printf("⚠️ REVERSE INHIBITED: Rear Obstacle at %d cm!\n", backDistanceCm);
+      return;
+    }
     stopDriving(); delay(20);
     currentDriveState = DRIVE_BACK;
     if (driveMotorDriver == DRIVER_L298N) {
@@ -2231,24 +2757,24 @@ void processCommand(String cmd) {
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
     isCentering = false;
+    isAutoHoming = false;
     if (!steerLimitsEnabled || currentPositionMs > -steerLimitLeftMs) {
-      stopSteering(); delay(30);
-      currentSteerState = STEER_LEFT;
-      lastSteerUpdateMs = millis();
-      setRelayOn(pinLeft);
+      startSteeringLeft();
     }
   }
   else if (cmd == "right" || cmd == "R" || cmd == "r" || cmd == "D" || cmd == "d") {
     isCentering = false;
+    isAutoHoming = false;
     if (!steerLimitsEnabled || currentPositionMs < steerLimitRightMs) {
-      stopSteering(); delay(30);
-      currentSteerState = STEER_RIGHT;
-      lastSteerUpdateMs = millis();
-      setRelayOn(pinRight);
+      startSteeringRight();
     }
+  }
+  else if (cmd == "auto_home" || cmd == "home" || cmd == "H" || cmd == "h") {
+    startAutoHoming();
   }
   else if (cmd == "stop_steer" || cmd == "t") {
     isCentering = false;
+    isAutoHoming = false;
     stopSteering();
   }
   else if (cmd == "stop_drive") {
@@ -2259,6 +2785,7 @@ void processCommand(String cmd) {
   }
   else if (cmd == "center" || cmd == "C" || cmd == "c") {
     isCentering = true;
+    isAutoHoming = false;
     playI2STone(500, 100);
   }
   else if (cmd == "set_center" || cmd == "Z" || cmd == "z") {
@@ -2361,6 +2888,15 @@ void setup() {
   setRelayOff(pinBack);
   setRelayOff(pinLeft);
   setRelayOff(pinRight);
+
+  // Initialize Dual HC-SR04 Ultrasonic Pins
+  pinMode(pinTrigFront, OUTPUT);
+  pinMode(pinEchoFront, INPUT);
+  digitalWrite(pinTrigFront, LOW);
+
+  pinMode(pinTrigBack, OUTPUT);
+  pinMode(pinEchoBack, INPUT);
+  digitalWrite(pinTrigBack, LOW);
   
   stopDriving();
   stopSteering();
@@ -2393,9 +2929,10 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
-  // 5. Load Persistent Speed, Steering Calibration Limits, Audio Volume, Theme, & Motor Driver from Flash
+  // 5. Load Persistent Speed, Steering Limits, Volume, Theme, Driver, & Collision Avoidance from Flash
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
+  steerSpeedPercent = prefs.getInt("s_spd", 75);
   steerLimitLeftMs = prefs.getLong("s_left", 2500);
   steerLimitRightMs = prefs.getLong("s_right", 2500);
   steerLimitsEnabled = prefs.getBool("s_lim_en", true);
@@ -2403,8 +2940,11 @@ void setup() {
   audioMuted = prefs.getBool("mute", false);
   currentSoundTheme = (SoundTheme)prefs.getInt("theme", 0);
   driveMotorDriver = (MotorDriverType)prefs.getInt("driver", 0);
+  steerMotorDriver = (MotorDriverType)prefs.getInt("s_driver", 0);
+  collisionAvoidanceEnabled = prefs.getBool("son_en", true);
+  collisionThresholdCm = prefs.getInt("son_dist", 30);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, Driver=%d\n", driveSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerSpd=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, DriveDriver=%d, SteerDriver=%d, SonarEn=%d, SonarDist=%dcm\n", driveSpeedPercent, steerSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver, (int)steerMotorDriver, collisionAvoidanceEnabled, collisionThresholdCm);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -2418,7 +2958,16 @@ void setup() {
     json += "\"pin5\":\"" + String(currentDriveState == DRIVE_BACK ? "ON" : "OFF") + "\",";
     json += "\"pin6\":\"" + String(currentSteerState == STEER_LEFT ? "ON" : "OFF") + "\",";
     json += "\"pin7\":\"" + String(currentSteerState == STEER_RIGHT ? "ON" : "OFF") + "\",";
-    json += "\"pos\":" + String(currentPositionMs);
+    json += "\"pos\":" + String(currentPositionMs) + ",";
+    json += "\"steer_driver\":" + String((int)steerMotorDriver) + ",";
+    json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
+    json += "\"is_homing\":" + String(isAutoHoming ? "true" : "false") + ",";
+    json += "\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + ",";
+    json += "\"sonar_dist\":" + String(collisionThresholdCm) + ",";
+    json += "\"front_cm\":" + String(frontDistanceCm) + ",";
+    json += "\"back_cm\":" + String(backDistanceCm) + ",";
+    json += "\"front_blk\":" + String(frontBlocked ? "true" : "false") + ",";
+    json += "\"back_blk\":" + String(backBlocked ? "true" : "false");
     json += "}";
     server.send(200, "application/json", json);
   });
@@ -2434,6 +2983,35 @@ void setup() {
       Serial.printf("Drive Motor Driver Set: %s\n", driveMotorDriver == DRIVER_L298N ? "L298N H-Bridge (PWM)" : "Relay Module");
     }
     server.send(200, "application/json", "{\"driver\":" + String((int)driveMotorDriver) + "}");
+  });
+
+  server.on("/set_steer_driver", []() {
+    if (server.hasArg("val")) {
+      int d = server.arg("val").toInt();
+      stopSteering();
+      steerMotorDriver = (MotorDriverType)constrain(d, 0, 1);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("s_driver", (int)steerMotorDriver);
+      prefs.end();
+      Serial.printf("Steer Motor Driver Set: %s\n", steerMotorDriver == DRIVER_L298N ? "L298N H-Bridge (PWM)" : "Relay Module");
+    }
+    server.send(200, "application/json", "{\"steer_driver\":" + String((int)steerMotorDriver) + "}");
+  });
+
+  server.on("/set_steer_speed", []() {
+    if (server.hasArg("val")) {
+      steerSpeedPercent = constrain(server.arg("val").toInt(), 25, 100);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("s_spd", steerSpeedPercent);
+      prefs.end();
+      Serial.printf("Steer Speed Updated: %d%%\n", steerSpeedPercent);
+    }
+    server.send(200, "application/json", "{\"steer_speed\":" + String(steerSpeedPercent) + "}");
+  });
+
+  server.on("/auto_home", []() {
+    processCommand("auto_home");
+    server.send(200, "text/plain", "Auto-Homing Started");
   });
 
   server.on("/set_speed", []() {
@@ -2526,16 +3104,44 @@ void setup() {
   server.on("/get_config", []() {
     String json = "{";
     json += "\"speed\":" + String(driveSpeedPercent) + ",";
+    json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
     json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
     json += "\"limits_enabled\":" + String(steerLimitsEnabled ? "true" : "false") + ",";
     json += "\"driver\":" + String((int)driveMotorDriver) + ",";
+    json += "\"steer_driver\":" + String((int)steerMotorDriver) + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"theme\":" + String((int)currentSoundTheme) + ",";
-    json += "\"pos\":" + String(currentPositionMs);
+    json += "\"pos\":" + String(currentPositionMs) + ",";
+    json += "\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + ",";
+    json += "\"sonar_dist\":" + String(collisionThresholdCm);
     json += "}";
     server.send(200, "application/json", json);
+  });
+
+  server.on("/toggle_collision", []() {
+    collisionAvoidanceEnabled = !collisionAvoidanceEnabled;
+    prefs.begin("tink_cfg", false);
+    prefs.putBool("son_en", collisionAvoidanceEnabled);
+    prefs.end();
+    if (!collisionAvoidanceEnabled) {
+      frontBlocked = false;
+      backBlocked = false;
+    }
+    Serial.printf("Collision Avoidance Toggled: %d\n", collisionAvoidanceEnabled);
+    server.send(200, "application/json", "{\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + "}");
+  });
+
+  server.on("/set_collision_dist", []() {
+    if (server.hasArg("val")) {
+      collisionThresholdCm = constrain(server.arg("val").toInt(), 10, 100);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("son_dist", collisionThresholdCm);
+      prefs.end();
+      Serial.printf("Collision Distance Threshold Set: %d cm\n", collisionThresholdCm);
+    }
+    server.send(200, "application/json", "{\"sonar_dist\":" + String(collisionThresholdCm) + "}");
   });
 
   server.on("/scan_ble", []() {
@@ -2599,6 +3205,9 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
 
+  // Non-blocking Dual HC-SR04 Sonar Ping & Directional Emergency Braking
+  updateSonarCollisionCheck();
+
   // Safe Asynchronous Gamepad Pairing
   handleGamepadConnectionLoop();
 
@@ -2653,23 +3262,19 @@ void loop() {
   // Dynamic RGB LED & Audio Status (or Idle Rainbow)
   updateLedStatus();
   
-  // Steering Limits & Centering Logic
-  if (isCentering) {
+  // Steering Limits, Auto-Homing, & Centering Logic
+  if (isAutoHoming) {
+     handleAutoHomingLoop();
+  } else if (isCentering) {
      if (currentPositionMs > 40) {
          if (currentSteerState != STEER_LEFT) {
-             stopSteering(); delay(30);
-             currentSteerState = STEER_LEFT;
-             lastSteerUpdateMs = millis();
-             setRelayOn(pinLeft);
+             startSteeringLeft();
          } else {
              updateSteeringPosition();
          }
      } else if (currentPositionMs < -40) {
          if (currentSteerState != STEER_RIGHT) {
-             stopSteering(); delay(30);
-             currentSteerState = STEER_RIGHT;
-             lastSteerUpdateMs = millis();
-             setRelayOn(pinRight);
+             startSteeringRight();
          } else {
              updateSteeringPosition();
          }
