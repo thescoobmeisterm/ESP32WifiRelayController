@@ -726,7 +726,7 @@ void handleGamepadConnectionLoop() {
   }
 }
 
-const char* htmlPage = R"HTML(
+const char htmlPage[] PROGMEM = R"HTML(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2665,7 +2665,7 @@ void updateSonarCollisionCheck() {
     digitalWrite(pinTrigFront, HIGH);
     delayMicroseconds(10);
     digitalWrite(pinTrigFront, LOW);
-    unsigned long duration = pulseIn(pinEchoFront, HIGH, 12000); // 12ms max (~205cm)
+    unsigned long duration = pulseIn(pinEchoFront, HIGH, 7000); // 7ms max (~120cm)
     if (duration > 0) {
       frontDistanceCm = (int)(duration * 0.0343 / 2.0);
       frontBlocked = (frontDistanceCm > 0 && frontDistanceCm <= collisionThresholdCm);
@@ -2681,7 +2681,7 @@ void updateSonarCollisionCheck() {
     digitalWrite(pinTrigBack, HIGH);
     delayMicroseconds(10);
     digitalWrite(pinTrigBack, LOW);
-    unsigned long duration = pulseIn(pinEchoBack, HIGH, 12000); // 12ms max (~205cm)
+    unsigned long duration = pulseIn(pinEchoBack, HIGH, 7000); // 7ms max (~120cm)
     if (duration > 0) {
       backDistanceCm = (int)(duration * 0.0343 / 2.0);
       backBlocked = (backDistanceCm > 0 && backDistanceCm <= collisionThresholdCm);
@@ -2861,7 +2861,7 @@ void sendHtmlWithNoCache() {
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
-  server.send(200, "text/html", htmlPage);
+  server.send_P(200, "text/html", htmlPage);
 }
 
 void setup() {
@@ -2891,11 +2891,11 @@ void setup() {
 
   // Initialize Dual HC-SR04 Ultrasonic Pins
   pinMode(pinTrigFront, OUTPUT);
-  pinMode(pinEchoFront, INPUT);
+  pinMode(pinEchoFront, INPUT_PULLDOWN);
   digitalWrite(pinTrigFront, LOW);
 
   pinMode(pinTrigBack, OUTPUT);
-  pinMode(pinEchoBack, INPUT);
+  pinMode(pinEchoBack, INPUT_PULLDOWN);
   digitalWrite(pinTrigBack, LOW);
   
   stopDriving();
