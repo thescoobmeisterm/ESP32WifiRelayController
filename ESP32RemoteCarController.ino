@@ -134,6 +134,14 @@ unsigned long lastRainbowMs = 0;
 unsigned long lastHeartbeatMs = 0;
 const unsigned long FAILSAFE_TIMEOUT_MS = 3000; // 3 seconds connection timeout
 
+// --- Configurable Acceleration Ramp Times (ms) for L298N ---
+int driveRampMs = 400;               // Time in ms to reach target drive speed (0 = Instant, 0 - 3000ms)
+int steerRampMs = 250;               // Time in ms to reach target steer speed (0 = Instant, 0 - 2000ms)
+unsigned long driveRampStartMs = 0;  // Timestamp when current drive motion started
+unsigned long steerRampStartMs = 0;  // Timestamp when current steer motion started
+int currentDrivePwm = 0;             // Active hardware PWM output (0 - 255)
+int currentSteerPwm = 0;             // Active hardware PWM output (0 - 255)
+
 // Function declarations
 void stopDriving();
 void stopSteering();
@@ -141,6 +149,7 @@ void startSteeringLeft();
 void startSteeringRight();
 void startAutoHoming();
 void handleAutoHomingLoop();
+void updateMotorRamping();
 void stopAll();
 void processCommand(String cmd);
 void triggerSetCenterFlash();
@@ -1536,6 +1545,24 @@ const char htmlPage[] PROGMEM = R"HTML(
           <div style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:sans-serif;" id="driverDesc">
             Mode: Relays (Time-Sliced Soft PWM on GPIO 4/5)
           </div>
+
+          <!-- Drive Acceleration Ramp Slider (L298N) -->
+          <div style="margin-top:10px; border-top:1px solid #334155; padding-top:8px;" id="driveRampGroup">
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; font-weight:bold;">
+              <span>🚀 DRIVE ACCELERATION RAMP</span>
+              <span id="driveRampLabel" style="color:#00f3ff;">0.40s (Smooth)</span>
+            </div>
+            <input type="range" id="driveRampSlider" class="control-slider" min="0" max="3000" step="50" value="400" oninput="onDriveRampChange(this.value)">
+            <div style="display:flex; gap:4px; margin-top:6px;">
+              <button class="preset-btn" id="btnDRamp0" onclick="setDriveRampPreset(0)">⚡ 0s Instant</button>
+              <button class="preset-btn" id="btnDRamp300" onclick="setDriveRampPreset(300)">🏎️ 0.3s Sport</button>
+              <button class="preset-btn active" id="btnDRamp600" onclick="setDriveRampPreset(600)">🚗 0.6s Smooth</button>
+              <button class="preset-btn" id="btnDRamp1200" onclick="setDriveRampPreset(1200)">🐢 1.2s Soft</button>
+            </div>
+            <div style="font-size:9px; color:#64748b; margin-top:4px;">
+              Controls how smoothly the drive motor accelerates from rest to set speed. Stopping remains instant.
+            </div>
+          </div>
         </div>
 
         <!-- Steering Motor Driver Card -->
@@ -1550,6 +1577,24 @@ const char htmlPage[] PROGMEM = R"HTML(
           </div>
           <div style="font-size:10px; color:#94a3b8; margin-top:6px; font-family:sans-serif;" id="steerDriverDesc">
             Mode: Relays (Digital ON/OFF on GPIO 6/7)
+          </div>
+
+          <!-- Steering Acceleration Ramp Slider (L298N) -->
+          <div style="margin-top:10px; border-top:1px solid #334155; padding-top:8px;" id="steerRampGroup">
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; font-weight:bold;">
+              <span>📐 STEERING RAMP TIME</span>
+              <span id="steerRampLabel" style="color:#00f3ff;">0.25s (Quick)</span>
+            </div>
+            <input type="range" id="steerRampSlider" class="control-slider" min="0" max="2000" step="50" value="250" oninput="onSteerRampChange(this.value)">
+            <div style="display:flex; gap:4px; margin-top:6px;">
+              <button class="preset-btn" id="btnSRamp0" onclick="setSteerRampPreset(0)">⚡ 0s Instant</button>
+              <button class="preset-btn active" id="btnSRamp200" onclick="setSteerRampPreset(200)">🎯 0.2s Quick</button>
+              <button class="preset-btn" id="btnSRamp500" onclick="setSteerRampPreset(500)">📐 0.5s Smooth</button>
+              <button class="preset-btn" id="btnSRamp1000" onclick="setSteerRampPreset(1000)">🛡️ 1.0s Soft</button>
+            </div>
+            <div style="font-size:9px; color:#64748b; margin-top:4px;">
+              Controls how smoothly steering ramps up. Reduces gear strain and linkage shock.
+            </div>
           </div>
         </div>
       </div>
@@ -2018,6 +2063,7 @@ const char htmlPage[] PROGMEM = R"HTML(
       const b0 = document.getElementById('btnSteerDriver0');
       const b1 = document.getElementById('btnSteerDriver1');
       const desc = document.getElementById('steerDriverDesc');
+      const rampGrp = document.getElementById('steerRampGroup');
       if (lbl) {
         lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
         lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
@@ -2029,6 +2075,7 @@ const char htmlPage[] PROGMEM = R"HTML(
           'Mode: L298N Hardware PWM (Smooth & Variable Turning Speed on GPIO 6/7)' : 
           'Mode: 4-Channel Relays (Digital ON/OFF on GPIO 6/7)';
       }
+      if (rampGrp) rampGrp.style.opacity = isL298N ? '1' : '0.4';
     };
 
     const setSteerMotorDriver = (id) => {
@@ -2063,6 +2110,7 @@ const char htmlPage[] PROGMEM = R"HTML(
       const b1 = document.getElementById('btnDriver1');
       const desc = document.getElementById('driverDesc');
       const badge = document.getElementById('mainDriverBadge');
+      const rampGrp = document.getElementById('driveRampGroup');
       if (lbl) {
         lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
         lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
@@ -2078,11 +2126,64 @@ const char htmlPage[] PROGMEM = R"HTML(
           'Mode: L298N Solid-State Hardware PWM (Silent & High Torque on GPIO 4/5)' : 
           'Mode: 4-Channel Relay Module (Time-Sliced Soft PWM on GPIO 4/5)';
       }
+      if (rampGrp) rampGrp.style.opacity = isL298N ? '1' : '0.4';
     };
 
     const setMotorDriver = (id) => {
       updateMotorDriverHud(id);
       fetch('/set_driver?val=' + id);
+    };
+
+    const updateDriveRampHud = (ms) => {
+      ms = parseInt(ms);
+      const slider = document.getElementById('driveRampSlider');
+      const lbl = document.getElementById('driveRampLabel');
+      if (slider) slider.value = ms;
+      if (lbl) {
+        if (ms === 0) lbl.innerText = '⚡ INSTANT (0s)';
+        else lbl.innerText = (ms / 1000).toFixed(2) + 's (' + (ms < 500 ? 'Sport' : ms < 1000 ? 'Smooth' : 'Soft') + ')';
+      }
+      const presets = [0, 300, 600, 1200];
+      for (let p of presets) {
+        const b = document.getElementById('btnDRamp' + p);
+        if (b) b.classList.toggle('active', Math.abs(ms - p) <= 50);
+      }
+    };
+
+    const onDriveRampChange = (val) => {
+      val = parseInt(val);
+      updateDriveRampHud(val);
+      fetch('/set_drive_ramp?val=' + val);
+    };
+
+    const setDriveRampPreset = (val) => {
+      onDriveRampChange(val);
+    };
+
+    const updateSteerRampHud = (ms) => {
+      ms = parseInt(ms);
+      const slider = document.getElementById('steerRampSlider');
+      const lbl = document.getElementById('steerRampLabel');
+      if (slider) slider.value = ms;
+      if (lbl) {
+        if (ms === 0) lbl.innerText = '⚡ INSTANT (0s)';
+        else lbl.innerText = (ms / 1000).toFixed(2) + 's (' + (ms < 300 ? 'Quick' : ms < 700 ? 'Smooth' : 'Soft') + ')';
+      }
+      const presets = [0, 200, 500, 1000];
+      for (let p of presets) {
+        const b = document.getElementById('btnSRamp' + p);
+        if (b) b.classList.toggle('active', Math.abs(ms - p) <= 50);
+      }
+    };
+
+    const onSteerRampChange = (val) => {
+      val = parseInt(val);
+      updateSteerRampHud(val);
+      fetch('/set_steer_ramp?val=' + val);
+    };
+
+    const setSteerRampPreset = (val) => {
+      onSteerRampChange(val);
     };
 
     let isSonarEnabled = true;
@@ -2255,6 +2356,12 @@ const char htmlPage[] PROGMEM = R"HTML(
           }
           if (cfg.steer_driver !== undefined) {
             updateSteerMotorDriverHud(cfg.steer_driver);
+          }
+          if (cfg.drive_ramp !== undefined) {
+            updateDriveRampHud(cfg.drive_ramp);
+          }
+          if (cfg.steer_ramp !== undefined) {
+            updateSteerRampHud(cfg.steer_ramp);
           }
           if (cfg.steer_left) {
             const s = document.getElementById('leftLimitSlider');
@@ -2524,6 +2631,7 @@ const char htmlPage[] PROGMEM = R"HTML(
 )HTML";
 
 void stopDriving() {
+  currentDrivePwm = 0;
   if (driveMotorDriver == DRIVER_L298N) {
     analogWrite(pinForward, 0);
     analogWrite(pinBack, 0);
@@ -2540,7 +2648,11 @@ void updateSteeringPosition() {
   if (delta > 0) {
     long effectiveDelta = delta;
     if (steerMotorDriver == DRIVER_L298N) {
-      effectiveDelta = (delta * steerSpeedPercent) / 100;
+      if (steerRampMs > 0 && currentSteerPwm > 0) {
+        effectiveDelta = (delta * currentSteerPwm) / 255;
+      } else {
+        effectiveDelta = (delta * steerSpeedPercent) / 100;
+      }
     }
     if (currentSteerState == STEER_LEFT) {
       currentPositionMs -= effectiveDelta;
@@ -2555,6 +2667,7 @@ void stopSteering() {
   if (currentSteerState != STEER_IDLE) {
      updateSteeringPosition();
   }
+  currentSteerPwm = 0;
   if (steerMotorDriver == DRIVER_L298N) {
     analogWrite(pinLeft, 0);
     analogWrite(pinRight, 0);
@@ -2569,10 +2682,17 @@ void startSteeringLeft() {
   stopSteering(); delay(20);
   currentSteerState = STEER_LEFT;
   lastSteerUpdateMs = millis();
+  steerRampStartMs = millis();
   if (steerMotorDriver == DRIVER_L298N) {
-    int pwmVal = map(steerSpeedPercent, 0, 100, 0, 255);
+    int targetPwm = map(steerSpeedPercent, 0, 100, 0, 255);
     analogWrite(pinRight, 0);
-    analogWrite(pinLeft, pwmVal);
+    if (steerRampMs <= 0) {
+      currentSteerPwm = targetPwm;
+      analogWrite(pinLeft, currentSteerPwm);
+    } else {
+      currentSteerPwm = 0;
+      analogWrite(pinLeft, 0);
+    }
   } else {
     setRelayOn(pinLeft);
   }
@@ -2582,12 +2702,71 @@ void startSteeringRight() {
   stopSteering(); delay(20);
   currentSteerState = STEER_RIGHT;
   lastSteerUpdateMs = millis();
+  steerRampStartMs = millis();
   if (steerMotorDriver == DRIVER_L298N) {
-    int pwmVal = map(steerSpeedPercent, 0, 100, 0, 255);
+    int targetPwm = map(steerSpeedPercent, 0, 100, 0, 255);
     analogWrite(pinLeft, 0);
-    analogWrite(pinRight, pwmVal);
+    if (steerRampMs <= 0) {
+      currentSteerPwm = targetPwm;
+      analogWrite(pinRight, currentSteerPwm);
+    } else {
+      currentSteerPwm = 0;
+      analogWrite(pinRight, 0);
+    }
   } else {
     setRelayOn(pinRight);
+  }
+}
+
+void updateMotorRamping() {
+  unsigned long now = millis();
+
+  // 1. DRIVE MOTOR ACCELERATION RAMP (L298N Mode)
+  if (driveMotorDriver == DRIVER_L298N) {
+    if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
+      if (driveRampMs <= 0) {
+        currentDrivePwm = targetPwm;
+      } else {
+        unsigned long elapsed = now - driveRampStartMs;
+        if (elapsed >= (unsigned long)driveRampMs) {
+          currentDrivePwm = targetPwm;
+        } else {
+          currentDrivePwm = (int)((targetPwm * elapsed) / driveRampMs);
+        }
+      }
+      if (currentDriveState == DRIVE_FORWARD) {
+        analogWrite(pinBack, 0);
+        analogWrite(pinForward, currentDrivePwm);
+      } else if (currentDriveState == DRIVE_BACK) {
+        analogWrite(pinForward, 0);
+        analogWrite(pinBack, currentDrivePwm);
+      }
+    }
+  }
+
+  // 2. STEERING MOTOR ACCELERATION RAMP (L298N Mode)
+  if (steerMotorDriver == DRIVER_L298N) {
+    if (currentSteerState == STEER_LEFT || currentSteerState == STEER_RIGHT) {
+      int targetPwm = map(steerSpeedPercent, 0, 100, 0, 255);
+      if (steerRampMs <= 0) {
+        currentSteerPwm = targetPwm;
+      } else {
+        unsigned long elapsed = now - steerRampStartMs;
+        if (elapsed >= (unsigned long)steerRampMs) {
+          currentSteerPwm = targetPwm;
+        } else {
+          currentSteerPwm = (int)((targetPwm * elapsed) / steerRampMs);
+        }
+      }
+      if (currentSteerState == STEER_LEFT) {
+        analogWrite(pinRight, 0);
+        analogWrite(pinLeft, currentSteerPwm);
+      } else if (currentSteerState == STEER_RIGHT) {
+        analogWrite(pinLeft, 0);
+        analogWrite(pinRight, currentSteerPwm);
+      }
+    }
   }
 }
 
@@ -2730,12 +2909,19 @@ void processCommand(String cmd) {
     stopDriving(); delay(20);
     currentDriveState = DRIVE_FORWARD;
     forwardCycleStartMs = millis();
+    driveRampStartMs = millis();
     if (driveMotorDriver == DRIVER_L298N) {
-      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
       analogWrite(pinBack, 0);
-      analogWrite(pinForward, pwmVal);
+      if (driveRampMs <= 0) {
+        currentDrivePwm = targetPwm;
+        analogWrite(pinForward, currentDrivePwm);
+      } else {
+        currentDrivePwm = 0;
+        analogWrite(pinForward, 0);
+      }
     } else {
-      if (driveSpeedPercent >= 100) setRelayOn(pinForward);
+      setRelayOn(pinForward);
     }
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
@@ -2747,12 +2933,19 @@ void processCommand(String cmd) {
     }
     stopDriving(); delay(20);
     currentDriveState = DRIVE_BACK;
+    driveRampStartMs = millis();
     if (driveMotorDriver == DRIVER_L298N) {
-      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
       analogWrite(pinForward, 0);
-      analogWrite(pinBack, pwmVal);
+      if (driveRampMs <= 0) {
+        currentDrivePwm = targetPwm;
+        analogWrite(pinBack, currentDrivePwm);
+      } else {
+        currentDrivePwm = 0;
+        analogWrite(pinBack, 0);
+      }
     } else {
-      if (driveSpeedPercent >= 100) setRelayOn(pinBack);
+      setRelayOn(pinBack);
     }
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
@@ -2933,6 +3126,8 @@ void setup() {
   prefs.begin("tink_cfg", true);
   driveSpeedPercent = prefs.getInt("speed", 60);
   steerSpeedPercent = prefs.getInt("s_spd", 75);
+  driveRampMs = prefs.getInt("d_ramp", 400);
+  steerRampMs = prefs.getInt("s_ramp", 250);
   steerLimitLeftMs = prefs.getLong("s_left", 2500);
   steerLimitRightMs = prefs.getLong("s_right", 2500);
   steerLimitsEnabled = prefs.getBool("s_lim_en", true);
@@ -2944,7 +3139,7 @@ void setup() {
   collisionAvoidanceEnabled = prefs.getBool("son_en", true);
   collisionThresholdCm = prefs.getInt("son_dist", 30);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerSpd=%d%%, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, DriveDriver=%d, SteerDriver=%d, SonarEn=%d, SonarDist=%dcm\n", driveSpeedPercent, steerSpeedPercent, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver, (int)steerMotorDriver, collisionAvoidanceEnabled, collisionThresholdCm);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerSpd=%d%%, DriveRamp=%dms, SteerRamp=%dms, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, DriveDriver=%d, SteerDriver=%d, SonarEn=%d, SonarDist=%dcm\n", driveSpeedPercent, steerSpeedPercent, driveRampMs, steerRampMs, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver, (int)steerMotorDriver, collisionAvoidanceEnabled, collisionThresholdCm);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -2960,6 +3155,9 @@ void setup() {
     json += "\"pin7\":\"" + String(currentSteerState == STEER_RIGHT ? "ON" : "OFF") + "\",";
     json += "\"pos\":" + String(currentPositionMs) + ",";
     json += "\"steer_driver\":" + String((int)steerMotorDriver) + ",";
+    json += "\"drive_driver\":" + String((int)driveMotorDriver) + ",";
+    json += "\"drive_ramp\":" + String(driveRampMs) + ",";
+    json += "\"steer_ramp\":" + String(steerRampMs) + ",";
     json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
     json += "\"is_homing\":" + String(isAutoHoming ? "true" : "false") + ",";
     json += "\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + ",";
@@ -3007,6 +3205,28 @@ void setup() {
       Serial.printf("Steer Speed Updated: %d%%\n", steerSpeedPercent);
     }
     server.send(200, "application/json", "{\"steer_speed\":" + String(steerSpeedPercent) + "}");
+  });
+
+  server.on("/set_drive_ramp", []() {
+    if (server.hasArg("val")) {
+      driveRampMs = constrain(server.arg("val").toInt(), 0, 3000);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("d_ramp", driveRampMs);
+      prefs.end();
+      Serial.printf("Drive Ramp Updated: %d ms\n", driveRampMs);
+    }
+    server.send(200, "application/json", "{\"drive_ramp\":" + String(driveRampMs) + "}");
+  });
+
+  server.on("/set_steer_ramp", []() {
+    if (server.hasArg("val")) {
+      steerRampMs = constrain(server.arg("val").toInt(), 0, 2000);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("s_ramp", steerRampMs);
+      prefs.end();
+      Serial.printf("Steer Ramp Updated: %d ms\n", steerRampMs);
+    }
+    server.send(200, "application/json", "{\"steer_ramp\":" + String(steerRampMs) + "}");
   });
 
   server.on("/auto_home", []() {
@@ -3110,6 +3330,8 @@ void setup() {
     json += "\"limits_enabled\":" + String(steerLimitsEnabled ? "true" : "false") + ",";
     json += "\"driver\":" + String((int)driveMotorDriver) + ",";
     json += "\"steer_driver\":" + String((int)steerMotorDriver) + ",";
+    json += "\"drive_ramp\":" + String(driveRampMs) + ",";
+    json += "\"steer_ramp\":" + String(steerRampMs) + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"theme\":" + String((int)currentSoundTheme) + ",";
@@ -3243,6 +3465,9 @@ void loop() {
 
   // Real-time Racing Simulator Dynamic Soundscape (Idle, Shifting, Drifting)
   updateSimulatorAudio();
+
+  // Smooth Hardware Motor & Steering Acceleration Ramping (L298N Mode)
+  updateMotorRamping();
 
   // Handle Hardware USB Serial input (MyRobotLab Serial Service)
   if (Serial.available()) {
