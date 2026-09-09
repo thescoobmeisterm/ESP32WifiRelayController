@@ -142,6 +142,18 @@ unsigned long steerRampStartMs = 0;  // Timestamp when current steer motion star
 int currentDrivePwm = 0;             // Active hardware PWM output (0 - 255)
 int currentSteerPwm = 0;             // Active hardware PWM output (0 - 255)
 
+// --- Configurable Drive Motor Voltage Governor (12V Supply Protection) ---
+int maxDriveVoltageMv = 6000;         // Max allowable voltage to motor in mV (Default: 6000mV = 6.0V)
+int batteryVoltageMv  = 12000;        // Power rail voltage in mV (Default: 12000mV = 12.0V)
+
+inline int getMaxDrivePwm() {
+  if (batteryVoltageMv <= 0) return 255;
+  float ratio = (float)maxDriveVoltageMv / (float)batteryVoltageMv;
+  if (ratio >= 1.0f) return 255;
+  if (ratio <= 0.1f) ratio = 0.1f;
+  return (int)(255 * ratio);
+}
+
 // Function declarations
 void stopDriving();
 void stopSteering();
@@ -1563,6 +1575,24 @@ const char htmlPage[] PROGMEM = R"HTML(
               Controls how smoothly the drive motor accelerates from rest to set speed. Stopping remains instant.
             </div>
           </div>
+
+          <!-- Drive Motor Voltage Governor (6V Motor Protection on 12V Supply) -->
+          <div style="margin-top:10px; border-top:1px solid #334155; padding-top:8px;" id="voltageCapGroup">
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; font-weight:bold;">
+              <span>🛡️ MOTOR VOLTAGE CEILING (12V PROTECTION)</span>
+              <span id="voltageCapLabel" style="color:#22c55e;">6.0V (50% Cap)</span>
+            </div>
+            <input type="range" id="voltageCapSlider" class="control-slider" min="3000" max="12000" step="500" value="6000" oninput="onVoltageCapChange(this.value)">
+            <div style="display:flex; gap:4px; margin-top:6px;">
+              <button class="preset-btn active" id="btnVCap60" onclick="setVoltageCapPreset(6000)">🛡️ 6.0V Safe (50%)</button>
+              <button class="preset-btn" id="btnVCap75" onclick="setVoltageCapPreset(7500)">⚡ 7.5V Sport (62%)</button>
+              <button class="preset-btn" id="btnVCap90" onclick="setVoltageCapPreset(9000)">🏎️ 9.0V Boost (75%)</button>
+              <button class="preset-btn" id="btnVCap120" onclick="setVoltageCapPreset(12000)">🚀 12.0V Full (100%)</button>
+            </div>
+            <div style="font-size:9px; color:#64748b; margin-top:4px;">
+              Clamps maximum PWM output so a 6V motor is never over-volted on a 12V supply. Cockpit throttle scales safely within this ceiling.
+            </div>
+          </div>
         </div>
 
         <!-- Steering Motor Driver Card -->
@@ -2102,8 +2132,13 @@ const char htmlPage[] PROGMEM = R"HTML(
         });
     };
 
+    let currentDriveDriver = 0;
+    let currentVoltageCapMv = 6000;
+    let currentBatteryMv = 12000;
+
     const updateMotorDriverHud = (id) => {
       id = parseInt(id);
+      currentDriveDriver = id;
       const isL298N = (id === 1);
       const lbl = document.getElementById('driverLabel');
       const b0 = document.getElementById('btnDriver0');
@@ -2111,13 +2146,20 @@ const char htmlPage[] PROGMEM = R"HTML(
       const desc = document.getElementById('driverDesc');
       const badge = document.getElementById('mainDriverBadge');
       const rampGrp = document.getElementById('driveRampGroup');
+      const vCapGrp = document.getElementById('voltageCapGroup');
       if (lbl) {
         lbl.innerText = isL298N ? '⚡ L298N H-BRIDGE' : '🎛️ 4-CH RELAYS';
         lbl.style.color = isL298N ? '#00ff88' : '#f59e0b';
       }
       if (badge) {
-        badge.innerText = isL298N ? '⚡ L298N' : '🎛️ RELAYS';
-        badge.style.color = isL298N ? '#00ff88' : '#f59e0b';
+        if (isL298N) {
+          const vStr = (currentVoltageCapMv / 1000).toFixed(1);
+          badge.innerText = '⚡ L298N (' + vStr + 'V)';
+          badge.style.color = '#00ff88';
+        } else {
+          badge.innerText = '🎛️ RELAYS';
+          badge.style.color = '#f59e0b';
+        }
       }
       if (b0) b0.classList.toggle('active', !isL298N);
       if (b1) b1.classList.toggle('active', isL298N);
@@ -2127,6 +2169,7 @@ const char htmlPage[] PROGMEM = R"HTML(
           'Mode: 4-Channel Relay Module (Time-Sliced Soft PWM on GPIO 4/5)';
       }
       if (rampGrp) rampGrp.style.opacity = isL298N ? '1' : '0.4';
+      if (vCapGrp) vCapGrp.style.opacity = isL298N ? '1' : '0.4';
     };
 
     const setMotorDriver = (id) => {
@@ -2184,6 +2227,39 @@ const char htmlPage[] PROGMEM = R"HTML(
 
     const setSteerRampPreset = (val) => {
       onSteerRampChange(val);
+    };
+
+    const updateVoltageCapHud = (vmax, vbat) => {
+      vmax = parseInt(vmax) || 6000;
+      currentVoltageCapMv = vmax;
+      if (vbat) currentBatteryMv = parseInt(vbat) || 12000;
+      const slider = document.getElementById('voltageCapSlider');
+      const lbl = document.getElementById('voltageCapLabel');
+      const badge = document.getElementById('mainDriverBadge');
+      const pct = Math.min(100, Math.max(10, Math.round((vmax / currentBatteryMv) * 100)));
+      if (slider) slider.value = vmax;
+      if (lbl) {
+        lbl.innerText = (vmax / 1000).toFixed(1) + 'V (' + pct + '% Cap)';
+        lbl.style.color = (pct <= 55) ? '#22c55e' : (pct <= 75) ? '#f59e0b' : '#38bdf8';
+      }
+      const presets = [6000, 7500, 9000, 12000];
+      for (let p of presets) {
+        const b = document.getElementById('btnVCap' + (p / 100));
+        if (b) b.classList.toggle('active', Math.abs(vmax - p) <= 250);
+      }
+      if (badge && currentDriveDriver === 1) {
+        badge.innerText = '⚡ L298N (' + (vmax / 1000).toFixed(1) + 'V)';
+      }
+    };
+
+    const onVoltageCapChange = (val) => {
+      val = parseInt(val);
+      updateVoltageCapHud(val, currentBatteryMv);
+      fetch('/set_voltage_cap?vmax=' + val + '&vbat=' + currentBatteryMv);
+    };
+
+    const setVoltageCapPreset = (val) => {
+      onVoltageCapChange(val);
     };
 
     let isSonarEnabled = true;
@@ -2362,6 +2438,9 @@ const char htmlPage[] PROGMEM = R"HTML(
           }
           if (cfg.steer_ramp !== undefined) {
             updateSteerRampHud(cfg.steer_ramp);
+          }
+          if (cfg.v_max !== undefined) {
+            updateVoltageCapHud(cfg.v_max, cfg.v_bat);
           }
           if (cfg.steer_left) {
             const s = document.getElementById('leftLimitSlider');
@@ -2724,7 +2803,8 @@ void updateMotorRamping() {
   // 1. DRIVE MOTOR ACCELERATION RAMP (L298N Mode)
   if (driveMotorDriver == DRIVER_L298N) {
     if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
+      int maxPwm = getMaxDrivePwm();
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, maxPwm);
       if (driveRampMs <= 0) {
         currentDrivePwm = targetPwm;
       } else {
@@ -2911,7 +2991,7 @@ void processCommand(String cmd) {
     forwardCycleStartMs = millis();
     driveRampStartMs = millis();
     if (driveMotorDriver == DRIVER_L298N) {
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, getMaxDrivePwm());
       analogWrite(pinBack, 0);
       if (driveRampMs <= 0) {
         currentDrivePwm = targetPwm;
@@ -2935,7 +3015,7 @@ void processCommand(String cmd) {
     currentDriveState = DRIVE_BACK;
     driveRampStartMs = millis();
     if (driveMotorDriver == DRIVER_L298N) {
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, 255);
+      int targetPwm = map(driveSpeedPercent, 0, 100, 0, getMaxDrivePwm());
       analogWrite(pinForward, 0);
       if (driveRampMs <= 0) {
         currentDrivePwm = targetPwm;
@@ -3136,10 +3216,12 @@ void setup() {
   currentSoundTheme = (SoundTheme)prefs.getInt("theme", 0);
   driveMotorDriver = (MotorDriverType)prefs.getInt("driver", 0);
   steerMotorDriver = (MotorDriverType)prefs.getInt("s_driver", 0);
+  maxDriveVoltageMv = prefs.getInt("v_max", 6000);
+  batteryVoltageMv  = prefs.getInt("v_bat", 12000);
   collisionAvoidanceEnabled = prefs.getBool("son_en", true);
   collisionThresholdCm = prefs.getInt("son_dist", 30);
   prefs.end();
-  Serial.printf("Loaded Config: Speed=%d%%, SteerSpd=%d%%, DriveRamp=%dms, SteerRamp=%dms, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, DriveDriver=%d, SteerDriver=%d, SonarEn=%d, SonarDist=%dcm\n", driveSpeedPercent, steerSpeedPercent, driveRampMs, steerRampMs, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver, (int)steerMotorDriver, collisionAvoidanceEnabled, collisionThresholdCm);
+  Serial.printf("Loaded Config: Speed=%d%%, SteerSpd=%d%%, DriveRamp=%dms, SteerRamp=%dms, VMax=%dmV, VBat=%dmV, SteerLeft=%ldms, SteerRight=%ldms, LimEn=%d, Vol=%d%%, Mute=%d, Theme=%d, DriveDriver=%d, SteerDriver=%d, SonarEn=%d, SonarDist=%dcm\n", driveSpeedPercent, steerSpeedPercent, driveRampMs, steerRampMs, maxDriveVoltageMv, batteryVoltageMv, steerLimitLeftMs, steerLimitRightMs, steerLimitsEnabled, audioVolumePercent, audioMuted, (int)currentSoundTheme, (int)driveMotorDriver, (int)steerMotorDriver, collisionAvoidanceEnabled, collisionThresholdCm);
 
   // Web Server Routes
   server.on("/", sendHtmlWithNoCache);
@@ -3148,6 +3230,7 @@ void setup() {
 
   server.on("/status", []() {
     lastHeartbeatMs = millis();
+    int vPct = batteryVoltageMv > 0 ? (int)((maxDriveVoltageMv * 100) / batteryVoltageMv) : 100;
     String json = "{";
     json += "\"pin4\":\"" + String(currentDriveState == DRIVE_FORWARD ? "ON" : "OFF") + "\",";
     json += "\"pin5\":\"" + String(currentDriveState == DRIVE_BACK ? "ON" : "OFF") + "\",";
@@ -3158,6 +3241,9 @@ void setup() {
     json += "\"drive_driver\":" + String((int)driveMotorDriver) + ",";
     json += "\"drive_ramp\":" + String(driveRampMs) + ",";
     json += "\"steer_ramp\":" + String(steerRampMs) + ",";
+    json += "\"v_max\":" + String(maxDriveVoltageMv) + ",";
+    json += "\"v_bat\":" + String(batteryVoltageMv) + ",";
+    json += "\"v_pct\":" + String(constrain(vPct, 10, 100)) + ",";
     json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
     json += "\"is_homing\":" + String(isAutoHoming ? "true" : "false") + ",";
     json += "\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + ",";
@@ -3216,6 +3302,25 @@ void setup() {
       Serial.printf("Drive Ramp Updated: %d ms\n", driveRampMs);
     }
     server.send(200, "application/json", "{\"drive_ramp\":" + String(driveRampMs) + "}");
+  });
+
+  server.on("/set_voltage_cap", []() {
+    if (server.hasArg("vmax")) {
+      maxDriveVoltageMv = constrain(server.arg("vmax").toInt(), 3000, 24000);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("v_max", maxDriveVoltageMv);
+      prefs.end();
+    }
+    if (server.hasArg("vbat")) {
+      batteryVoltageMv = constrain(server.arg("vbat").toInt(), 6000, 24000);
+      prefs.begin("tink_cfg", false);
+      prefs.putInt("v_bat", batteryVoltageMv);
+      prefs.end();
+    }
+    int vPct = batteryVoltageMv > 0 ? (int)((maxDriveVoltageMv * 100) / batteryVoltageMv) : 100;
+    vPct = constrain(vPct, 10, 100);
+    Serial.printf("Voltage Cap Updated: %d mV (Battery: %d mV, Cap: %d%%)\n", maxDriveVoltageMv, batteryVoltageMv, vPct);
+    server.send(200, "application/json", "{\"v_max\":" + String(maxDriveVoltageMv) + ",\"v_bat\":" + String(batteryVoltageMv) + ",\"v_pct\":" + String(vPct) + "}");
   });
 
   server.on("/set_steer_ramp", []() {
@@ -3332,6 +3437,10 @@ void setup() {
     json += "\"steer_driver\":" + String((int)steerMotorDriver) + ",";
     json += "\"drive_ramp\":" + String(driveRampMs) + ",";
     json += "\"steer_ramp\":" + String(steerRampMs) + ",";
+    int vPct = batteryVoltageMv > 0 ? (int)((maxDriveVoltageMv * 100) / batteryVoltageMv) : 100;
+    json += "\"v_max\":" + String(maxDriveVoltageMv) + ",";
+    json += "\"v_bat\":" + String(batteryVoltageMv) + ",";
+    json += "\"v_pct\":" + String(constrain(vPct, 10, 100)) + ",";
     json += "\"vol\":" + String(audioVolumePercent) + ",";
     json += "\"mute\":" + String(audioMuted ? "true" : "false") + ",";
     json += "\"theme\":" + String((int)currentSoundTheme) + ",";
