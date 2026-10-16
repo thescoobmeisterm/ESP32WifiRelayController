@@ -14,3 +14,7 @@ build/
 
 # Antigravity system logs
 .system_generated/
+
+# Python test caches
+__pycache__/
+*.pyc

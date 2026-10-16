@@ -8,6 +8,9 @@
 #include <BLEScan.h>
 #include <Preferences.h>
 #include "driver/i2s.h"
+#include "MotorPolicy.h"
+#include "esp_timer.h"
+#include "freertos/semphr.h"
 
 // AP Credentials
 const char* ssid = "TinkDrive";
@@ -98,11 +101,23 @@ MotorDriverType driveMotorDriver = DRIVER_RELAY; // Default: Relay Module (or L2
 MotorDriverType steerMotorDriver = DRIVER_RELAY; // Default: Relay Module (or L298N for variable speed steering)
 
 // --- Configurable Drive Speed, Steer Speed & Calibration Limits ---
+// Recursive lock serializes timer-task cutoff with command/ramp GPIO writes.
+// Never hold it during audio, BLE, network, NVS, or delay().
+SemaphoreHandle_t steeringMutex = nullptr;
+esp_timer_handle_t steeringTimer = nullptr;
+MotorPolicy::SteeringPulse steeringPulse;
+class SteeringGuard {
+public:
+  SteeringGuard() { if (steeringMutex) xSemaphoreTakeRecursive(steeringMutex, portMAX_DELAY); }
+  ~SteeringGuard() { if (steeringMutex) xSemaphoreGiveRecursive(steeringMutex); }
+};
+int steerPulseMs = 100;             // Maximum wall-clock on-time per press (20-500ms)
+int reverseSpeedPercent = 60;        // Independent reverse throttle (20-100%)
 int driveSpeedPercent = 60;          // Default drive throttle: 60% (Range: 20% to 100%)
 int steerSpeedPercent = 75;          // Default steer speed: 75% (Range: 25% to 100%)
 long steerLimitLeftMs = 2500;        // Max Left steering lock travel in ms (Range: 100ms - 15000ms)
 long steerLimitRightMs = 2500;       // Max Right steering lock travel in ms (Range: 100ms - 15000ms)
-bool steerLimitsEnabled = true;      // If false, unrestricted continuous steering is enabled
+bool steerLimitsEnabled = true;      // Optional estimated-position limits; pulse cutoff always applies
 unsigned long lastSteerUpdateMs = 0;
 bool isCentering = false;
 bool isAutoHoming = false;
@@ -142,8 +157,8 @@ unsigned long steerRampStartMs = 0;  // Timestamp when current steer motion star
 int currentDrivePwm = 0;             // Active hardware PWM output (0 - 255)
 int currentSteerPwm = 0;             // Active hardware PWM output (0 - 255)
 
-// --- Configurable Drive Motor Voltage Governor (12V Supply Protection) ---
-int maxDriveVoltageMv = 6000;         // Max allowable voltage to motor in mV (Default: 6000mV = 6.0V)
+// --- Drive PWM duty ceiling ratio (not regulated voltage or overvoltage protection) ---
+int maxDriveVoltageMv = 6000;         // Numerator for duty ratio, NOT measured or regulated motor voltage
 int batteryVoltageMv  = 12000;        // Power rail voltage in mV (Default: 12000mV = 12.0V)
 
 inline int getMaxDrivePwm() {
@@ -157,6 +172,7 @@ inline int getMaxDrivePwm() {
 // Function declarations
 void stopDriving();
 void stopSteering();
+void releaseSteering();
 void startSteeringLeft();
 void startSteeringRight();
 void startAutoHoming();
@@ -579,8 +595,8 @@ void gamepadNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, ui
 
   if (b1 & 0x04) processCommand("left");
   else if (b1 & 0x08) processCommand("right");
-  else if (currentSteerState != STEER_IDLE && !(b1 & 0x04) && !(b1 & 0x08)) {
-    stopSteering();
+  else {
+    releaseSteering(); // Neutral must rearm even after the timer already stopped output.
   }
 
   if (b2 & 0x01 || b2 & 0x02 || b1 & 0x10) {
@@ -1383,7 +1399,7 @@ const char htmlPage[] PROGMEM = R"HTML(
 
     <!-- Steering Centering Quick Actions -->
     <div class="utility-bar">
-      <button class="btn-util" onclick="sendCommand('center')">🎯 Recenter Steering (C)</button>
+      <button class="btn-util" disabled title="No position feedback">Auto-center unavailable</button>
       <button class="btn-util" onclick="sendCommand('set_center')">📍 Set Center (Z)</button>
     </div>
 
@@ -1412,9 +1428,9 @@ const char htmlPage[] PROGMEM = R"HTML(
     <div class="panel-card">
       <div class="panel-title">
         <span>⚡ DRIVE SPEED</span>
-        <span id="speedLabel" style="color:#00ff88; font-size:12px; font-weight:900;">60% SPEED</span>
+        <span id="speedLabel" style="color:#00ff88; font-size:12px; font-weight:900;">60% FORWARD</span>
       </div>
-      <input type="range" id="speedSlider" class="control-slider" min="20" max="100" value="60" oninput="onSpeedChange(this.value)">
+      <input type="range" id="speedSlider" class="control-slider" min="20" max="100" value="60" onchange="onSpeedChange(this.value)">
       <div style="display:flex; gap:6px; margin-top:4px;">
         <button class="preset-btn" id="btnSpdSlow" onclick="setSpeedPreset(35)">🐢 SLOW (35%)</button>
         <button class="preset-btn active" id="btnSpdMed" onclick="setSpeedPreset(65)">🚗 CRUISE (65%)</button>
@@ -1462,7 +1478,7 @@ const char htmlPage[] PROGMEM = R"HTML(
       <!-- Settings Sub-Tabs -->
       <div class="settings-tab-bar">
         <button class="settings-tab-btn active" id="stabSteer" onclick="switchSettingsPane('paneSteering', this)">📐 Steering</button>
-        <button class="settings-tab-btn" id="stabDriver" onclick="switchSettingsPane('paneDriver', this)">⚙️ Driver</button>
+        <button class="settings-tab-btn" id="stabDriver" onclick="switchSettingsPane('paneDriver', this)">⚙️ Drive</button>
         <button class="settings-tab-btn" id="stabThemes" onclick="switchSettingsPane('paneThemes', this)">🎮 Themes</button>
         <button class="settings-tab-btn" id="stabSensors" onclick="switchSettingsPane('paneSensors', this)">🛡️ Sensors</button>
         <button class="settings-tab-btn" id="stabGamepad" onclick="switchSettingsPane('paneGamepad', this)">📡 Gamepad</button>
@@ -1472,6 +1488,12 @@ const char htmlPage[] PROGMEM = R"HTML(
 
       <!-- PANE 1: STEERING LIMITS, SPEED & CALIBRATION -->
       <div class="settings-tab-pane active" id="paneSteering">
+        <div class="panel-card">
+          <label for="steerPulseSlider" id="steerPulseLabel">100 ms MAX PULSE</label>
+          <input type="range" id="steerPulseSlider" class="control-slider" min="20" max="500" step="1" value="100" oninput="document.getElementById('steerPulseLabel').innerText=this.value+' ms MAX PULSE'" onchange="saveMotorSetting('set_steer_pulse', this.value)">
+          <p>One short pulse per press, in either direction. Release / return to neutral before pressing again. The timer always applies, even with estimated limits off. No position, stall, or hard-stop detection.</p>
+          <p>Changing pulse duration stops any active pulse. A steering ramp longer than the pulse may produce little movement.</p>
+        </div>
         <div class="panel-card" style="margin-top:0;">
           <div class="panel-title">
             <span>📐 STEERING LIMITS & CALIBRATION</span>
@@ -1535,8 +1557,8 @@ const char htmlPage[] PROGMEM = R"HTML(
 
           <!-- 1-Tap Auto-Homing / Calibration -->
           <div style="margin-top:8px;">
-            <button class="preset-btn" id="btnAutoHome" onclick="triggerAutoHome()" style="width:100%; padding:9px 0; font-size:10px; color:#ec4899; border-color:#ec4899;">
-              🏠 AUTO-CALIBRATE TO HARD LIMIT (Zero Drift & Recenter)
+            <button class="preset-btn" id="btnAutoHome" disabled title="Unavailable without position / limit feedback" style="width:100%; padding:9px 0; font-size:10px; color:#ec4899; border-color:#ec4899;">
+              AUTO-HOME DISABLED — NO FEEDBACK
             </button>
           </div>
         </div>
@@ -1544,6 +1566,14 @@ const char htmlPage[] PROGMEM = R"HTML(
 
       <!-- PANE 2: MOTOR HARDWARE DRIVERS -->
       <div class="settings-tab-pane" id="paneDriver">
+        <div class="panel-card">
+          <div class="panel-title">DIRECTION SPEEDS (within L298N duty ceiling)</div>
+          <label for="forwardSpeedSetting" id="forwardSpeedLabel">60% FORWARD</label>
+          <input type="range" id="forwardSpeedSetting" class="control-slider" min="20" max="100" step="1" value="60" onchange="saveMotorSetting('set_speed', this.value)">
+          <label for="reverseSpeedSlider" id="reverseSpeedLabel">60% REVERSE</label>
+          <input type="range" id="reverseSpeedSlider" class="control-slider" min="20" max="100" step="1" value="60" onchange="saveMotorSetting('set_reverse_speed', this.value)">
+          <div id="motorSettingError" role="status"></div>
+        </div>
         <!-- Drive Motor Driver Card -->
         <div class="panel-card" style="margin-top:0;">
           <div class="panel-title">
@@ -1576,21 +1606,18 @@ const char htmlPage[] PROGMEM = R"HTML(
             </div>
           </div>
 
-          <!-- Drive Motor Voltage Governor (6V Motor Protection on 12V Supply) -->
+          <!-- L298N PWM duty ratio (not voltage regulation) -->
           <div style="margin-top:10px; border-top:1px solid #334155; padding-top:8px;" id="voltageCapGroup">
             <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; font-weight:bold;">
-              <span>🛡️ MOTOR VOLTAGE CEILING (12V PROTECTION)</span>
-              <span id="voltageCapLabel" style="color:#22c55e;">6.0V (50% Cap)</span>
+              <span>L298N PWM DUTY CEILING (NOT REGULATED VOLTAGE)</span>
+              <span id="voltageCapLabel" style="color:#22c55e;">6000 / 12000 = 50% duty</span>
             </div>
-            <input type="range" id="voltageCapSlider" class="control-slider" min="3000" max="12000" step="500" value="6000" oninput="onVoltageCapChange(this.value)">
+            <input type="range" id="voltageCapSlider" class="control-slider" min="3000" max="6000" step="100" value="6000" oninput="onVoltageCapChange(this.value)">
             <div style="display:flex; gap:4px; margin-top:6px;">
-              <button class="preset-btn active" id="btnVCap60" onclick="setVoltageCapPreset(6000)">🛡️ 6.0V Safe (50%)</button>
-              <button class="preset-btn" id="btnVCap75" onclick="setVoltageCapPreset(7500)">⚡ 7.5V Sport (62%)</button>
-              <button class="preset-btn" id="btnVCap90" onclick="setVoltageCapPreset(9000)">🏎️ 9.0V Boost (75%)</button>
-              <button class="preset-btn" id="btnVCap120" onclick="setVoltageCapPreset(12000)">🚀 12.0V Full (100%)</button>
+              <button class="preset-btn active" id="btnVCap60" onclick="setVoltageCapPreset(6000)">50% duty ratio</button>
             </div>
             <div style="font-size:9px; color:#64748b; margin-top:4px;">
-              Clamps maximum PWM output so a 6V motor is never over-volted on a 12V supply. Cockpit throttle scales safely within this ceiling.
+              Duty limit only: pulses still reach supply voltage (less driver losses). This does not regulate 6V or guarantee protection of a 6V motor on a 12–13V battery. No current/stall sensing. Use a suitable motor supply and hardware protection. Both direction speeds scale within this ceiling; no startup boost.
             </div>
           </div>
         </div>
@@ -1914,10 +1941,42 @@ const char htmlPage[] PROGMEM = R"HTML(
       document.getElementById('posMarker').style.left = pct + '%';
     };
 
+    const syncMotorSettings = (d) => {
+      const setValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = value;
+      };
+      if (d.speed !== undefined) {
+        setValue('speedSlider', d.speed);
+        setValue('forwardSpeedSetting', d.speed);
+        document.getElementById('speedLabel').innerText = d.speed + '% FORWARD';
+        document.getElementById('forwardSpeedLabel').innerText = d.speed + '% FORWARD';
+        updateSpeedPresetButtons(d.speed);
+      }
+      if (d.reverse_speed !== undefined) {
+        setValue('reverseSpeedSlider', d.reverse_speed);
+        document.getElementById('reverseSpeedLabel').innerText = d.reverse_speed + '% REVERSE';
+      }
+      if (d.steer_pulse_ms !== undefined) {
+        setValue('steerPulseSlider', d.steer_pulse_ms);
+        document.getElementById('steerPulseLabel').innerText = d.steer_pulse_ms + ' ms MAX PULSE';
+      }
+    };
+
+    const saveMotorSetting = async (route, val) => {
+      try {
+        const response = await fetch('/' + route + '?val=' + encodeURIComponent(val));
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Setting not saved');
+        syncMotorSettings(data);
+        document.getElementById('motorSettingError').innerText = '';
+      } catch (err) {
+        document.getElementById('motorSettingError').innerText = err.message;
+      }
+    };
+
     const onSpeedChange = (val) => {
-      document.getElementById('speedLabel').innerText = val + '% SPEED';
-      fetch('/set_speed?val=' + val);
-      updateSpeedPresetButtons(val);
+      saveMotorSetting('set_speed', val);
     };
 
     const setSpeedPreset = (val) => {
@@ -2010,7 +2069,7 @@ const char htmlPage[] PROGMEM = R"HTML(
         if (btn) { btn.classList.remove('active'); btn.innerText = '🔓 FREE STEER'; }
         if (badge) { badge.innerText = 'LIMITS: ACTIVE'; badge.style.color = '#22c55e'; }
       } else {
-        if (lbl) { lbl.innerText = 'LIMITS: UNRESTRICTED'; lbl.style.color = '#ec4899'; }
+        if (lbl) { lbl.innerText = 'ESTIMATED LIMITS OFF; PULSE ON'; lbl.style.color = '#ec4899'; }
         if (btn) { btn.classList.add('active'); btn.innerText = '🔒 RESTRICT'; }
         if (badge) { badge.innerText = 'LIMITS: FREE'; badge.style.color = '#ec4899'; }
       }
@@ -2113,24 +2172,7 @@ const char htmlPage[] PROGMEM = R"HTML(
       fetch('/set_steer_driver?val=' + id);
     };
 
-    const triggerAutoHome = () => {
-      const btn = document.getElementById('btnAutoHome');
-      if (btn) {
-        btn.innerText = '⏳ HOMING TO HARD LIMIT...';
-        btn.style.color = '#00f3ff';
-        btn.style.borderColor = '#00f3ff';
-      }
-      fetch('/auto_home')
-        .then(() => {
-          setTimeout(() => {
-            if (btn) {
-              btn.innerText = '🏠 AUTO-CALIBRATE TO HARD LIMIT (Zero Drift & Recenter)';
-              btn.style.color = '#ec4899';
-              btn.style.borderColor = '#ec4899';
-            }
-          }, 4000);
-        });
-    };
+
 
     let currentDriveDriver = 0;
     let currentVoltageCapMv = 6000;
@@ -2239,16 +2281,16 @@ const char htmlPage[] PROGMEM = R"HTML(
       const pct = Math.min(100, Math.max(10, Math.round((vmax / currentBatteryMv) * 100)));
       if (slider) slider.value = vmax;
       if (lbl) {
-        lbl.innerText = (vmax / 1000).toFixed(1) + 'V (' + pct + '% Cap)';
+        lbl.innerText = pct + '% duty (' + vmax + '/' + currentBatteryMv + ')';
         lbl.style.color = (pct <= 55) ? '#22c55e' : (pct <= 75) ? '#f59e0b' : '#38bdf8';
       }
-      const presets = [6000, 7500, 9000, 12000];
+      const presets = [6000];
       for (let p of presets) {
         const b = document.getElementById('btnVCap' + (p / 100));
         if (b) b.classList.toggle('active', Math.abs(vmax - p) <= 250);
       }
       if (badge && currentDriveDriver === 1) {
-        badge.innerText = '⚡ L298N (' + (vmax / 1000).toFixed(1) + 'V)';
+        badge.innerText = '⚡ L298N (' + pct + '% duty)';
       }
     };
 
@@ -2417,11 +2459,7 @@ const char htmlPage[] PROGMEM = R"HTML(
       fetch('/get_config')
         .then(r => r.json())
         .then(cfg => {
-          if (cfg.speed) {
-            document.getElementById('speedSlider').value = cfg.speed;
-            document.getElementById('speedLabel').innerText = cfg.speed + '% SPEED';
-            updateSpeedPresetButtons(cfg.speed);
-          }
+          syncMotorSettings(cfg);
           if (cfg.steer_speed) {
             document.getElementById('steerSpeedSlider').value = cfg.steer_speed;
             document.getElementById('steerSpeedLabel').innerText = cfg.steer_speed + '% SPEED';
@@ -2496,6 +2534,7 @@ const char htmlPage[] PROGMEM = R"HTML(
           if (d.sonar_en !== undefined) {
             updateSonarHud(d);
           }
+          syncMotorSettings(d);
           if (d.steer_driver !== undefined) {
             updateSteerMotorDriverHud(d.steer_driver);
           }
@@ -2722,6 +2761,7 @@ void stopDriving() {
 }
 
 void updateSteeringPosition() {
+  SteeringGuard guard;
   unsigned long now = millis();
   long delta = now - lastSteerUpdateMs;
   if (delta > 0) {
@@ -2743,6 +2783,9 @@ void updateSteeringPosition() {
 }
 
 void stopSteering() {
+  SteeringGuard guard;
+  if (steeringTimer) esp_timer_stop(steeringTimer);
+  steeringPulse.stop();
   if (currentSteerState != STEER_IDLE) {
      updateSteeringPosition();
   }
@@ -2757,45 +2800,46 @@ void stopSteering() {
   currentSteerState = STEER_IDLE;
 }
 
-void startSteeringLeft() {
-  stopSteering(); delay(20);
-  currentSteerState = STEER_LEFT;
+// Only explicit neutral/release rearms the next pulse, not timeout or failsafe.
+void releaseSteering() {
+  SteeringGuard guard;
+  stopSteering();
+  steeringPulse.release();
+}
+
+void steeringPulseTimeout(void*) {
+  SteeringGuard guard;
+  // Reject a stale queued callback if a fresh press has already begun.
+  if (steeringPulse.expired(millis())) stopSteering();
+}
+
+void startSteering(SteerState direction) {
+  // Fail closed if timer/mutex allocation failed.
+  if (!steeringMutex || !steeringTimer) return;
+  SteeringGuard guard;
+  if (!steeringPulse.begin(millis(), steerPulseMs)) return;
+  currentSteerState = direction;
   lastSteerUpdateMs = millis();
   steerRampStartMs = millis();
+  // Arm before energizing. Cutoff runs in ESP_TIMER_TASK even if loop blocks.
+  if (esp_timer_start_once(steeringTimer, (uint64_t)steerPulseMs * 1000) != ESP_OK) {
+    stopSteering();
+    return;
+  }
+  int activePin = direction == STEER_LEFT ? pinLeft : pinRight;
+  int inactivePin = direction == STEER_LEFT ? pinRight : pinLeft;
   if (steerMotorDriver == DRIVER_L298N) {
-    int targetPwm = map(steerSpeedPercent, 0, 100, 0, 255);
-    analogWrite(pinRight, 0);
-    if (steerRampMs <= 0) {
-      currentSteerPwm = targetPwm;
-      analogWrite(pinLeft, currentSteerPwm);
-    } else {
-      currentSteerPwm = 0;
-      analogWrite(pinLeft, 0);
-    }
+    currentSteerPwm = steerRampMs <= 0 ? map(steerSpeedPercent, 0, 100, 0, 255) : 0;
+    analogWrite(inactivePin, 0);
+    analogWrite(activePin, currentSteerPwm);
   } else {
-    setRelayOn(pinLeft);
+    setRelayOff(inactivePin);
+    setRelayOn(activePin);
   }
 }
 
-void startSteeringRight() {
-  stopSteering(); delay(20);
-  currentSteerState = STEER_RIGHT;
-  lastSteerUpdateMs = millis();
-  steerRampStartMs = millis();
-  if (steerMotorDriver == DRIVER_L298N) {
-    int targetPwm = map(steerSpeedPercent, 0, 100, 0, 255);
-    analogWrite(pinLeft, 0);
-    if (steerRampMs <= 0) {
-      currentSteerPwm = targetPwm;
-      analogWrite(pinRight, currentSteerPwm);
-    } else {
-      currentSteerPwm = 0;
-      analogWrite(pinRight, 0);
-    }
-  } else {
-    setRelayOn(pinRight);
-  }
-}
+void startSteeringLeft() { startSteering(STEER_LEFT); }
+void startSteeringRight() { startSteering(STEER_RIGHT); }
 
 void updateMotorRamping() {
   unsigned long now = millis();
@@ -2804,7 +2848,7 @@ void updateMotorRamping() {
   if (driveMotorDriver == DRIVER_L298N) {
     if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
       int maxPwm = getMaxDrivePwm();
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, maxPwm);
+      int targetPwm = map(currentDriveState == DRIVE_BACK ? reverseSpeedPercent : driveSpeedPercent, 0, 100, 0, maxPwm);
       if (driveRampMs <= 0) {
         currentDrivePwm = targetPwm;
       } else {
@@ -2823,8 +2867,19 @@ void updateMotorRamping() {
         analogWrite(pinBack, currentDrivePwm);
       }
     }
+  } else if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
+    // Legacy relay time slicing: direction-specific duty, not voltage regulation.
+    int speed = currentDriveState == DRIVE_BACK ? reverseSpeedPercent : driveSpeedPercent;
+    int activePin = currentDriveState == DRIVE_BACK ? pinBack : pinForward;
+    int inactivePin = currentDriveState == DRIVE_BACK ? pinForward : pinBack;
+    setRelayOff(inactivePin);
+    if (now % 120 < (unsigned long)(120 * speed / 100)) setRelayOn(activePin);
+    else setRelayOff(activePin);
   }
 
+  // Timer and ramp share a lock: no ramp write can re-energize an expired pulse.
+  SteeringGuard guard;
+  if (steeringPulse.expired(millis())) stopSteering();
   // 2. STEERING MOTOR ACCELERATION RAMP (L298N Mode)
   if (steerMotorDriver == DRIVER_L298N) {
     if (currentSteerState == STEER_LEFT || currentSteerState == STEER_RIGHT) {
@@ -2851,26 +2906,15 @@ void updateMotorRamping() {
 }
 
 void startAutoHoming() {
-  isAutoHoming = true;
+  stopSteering();
+  isAutoHoming = false;
   isCentering = false;
-  autoHomeStartMs = millis();
-  autoHomeDurationMs = max(3500L, steerLimitLeftMs + 1000L);
-  startSteeringLeft(); // Drive toward the physical hardware limit switch
-  Serial.printf("🎯 AUTO-HOMING STARTED: Driving to hard limit for %ld ms...\n", autoHomeDurationMs);
+  Serial.println("Auto-home/auto-center disabled: no steering position or limit feedback. Use short manual pulses.");
 }
 
 void handleAutoHomingLoop() {
-  if (!isAutoHoming) return;
-  unsigned long elapsed = millis() - autoHomeStartMs;
-  if (elapsed >= autoHomeDurationMs) {
-    // Reached physical limit switch!
-    stopSteering();
-    isAutoHoming = false;
-    currentPositionMs = -steerLimitLeftMs; // Calibrated to known limit position
-    Serial.println("🎯 HARD LIMIT REACHED! Recalibrated position. Centering now...");
-    triggerSetCenterFlash();
-    isCentering = true; // Automatically center steering from the known home!
-  }
+  // No open-loop hard-stop calibration without feedback.
+  if (isAutoHoming || isCentering) startAutoHoming();
 }
 
 void stopAll() {
@@ -2986,23 +3030,12 @@ void processCommand(String cmd) {
       Serial.printf("⚠️ FORWARD INHIBITED: Front Obstacle at %d cm!\n", frontDistanceCm);
       return;
     }
+    if (currentDriveState == DRIVE_FORWARD) return;
     stopDriving(); delay(20);
     currentDriveState = DRIVE_FORWARD;
     forwardCycleStartMs = millis();
     driveRampStartMs = millis();
-    if (driveMotorDriver == DRIVER_L298N) {
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, getMaxDrivePwm());
-      analogWrite(pinBack, 0);
-      if (driveRampMs <= 0) {
-        currentDrivePwm = targetPwm;
-        analogWrite(pinForward, currentDrivePwm);
-      } else {
-        currentDrivePwm = 0;
-        analogWrite(pinForward, 0);
-      }
-    } else {
-      setRelayOn(pinForward);
-    }
+    updateMotorRamping();
   }
   else if (cmd == "back" || cmd == "B" || cmd == "b" || cmd == "S" || cmd == "s") {
     if (collisionAvoidanceEnabled && backBlocked) {
@@ -3011,22 +3044,11 @@ void processCommand(String cmd) {
       Serial.printf("⚠️ REVERSE INHIBITED: Rear Obstacle at %d cm!\n", backDistanceCm);
       return;
     }
+    if (currentDriveState == DRIVE_BACK) return;
     stopDriving(); delay(20);
     currentDriveState = DRIVE_BACK;
     driveRampStartMs = millis();
-    if (driveMotorDriver == DRIVER_L298N) {
-      int targetPwm = map(driveSpeedPercent, 0, 100, 0, getMaxDrivePwm());
-      analogWrite(pinForward, 0);
-      if (driveRampMs <= 0) {
-        currentDrivePwm = targetPwm;
-        analogWrite(pinBack, currentDrivePwm);
-      } else {
-        currentDrivePwm = 0;
-        analogWrite(pinBack, 0);
-      }
-    } else {
-      setRelayOn(pinBack);
-    }
+    updateMotorRamping();
   }
   else if (cmd == "left" || cmd == "L" || cmd == "l" || cmd == "A" || cmd == "a") {
     isCentering = false;
@@ -3048,7 +3070,7 @@ void processCommand(String cmd) {
   else if (cmd == "stop_steer" || cmd == "t") {
     isCentering = false;
     isAutoHoming = false;
-    stopSteering();
+    releaseSteering();
   }
   else if (cmd == "stop_drive") {
     stopDriving();
@@ -3057,9 +3079,7 @@ void processCommand(String cmd) {
     stopAll();
   }
   else if (cmd == "center" || cmd == "C" || cmd == "c") {
-    isCentering = true;
-    isAutoHoming = false;
-    playI2STone(500, 100);
+    startAutoHoming(); // Refuse motion without feedback.
   }
   else if (cmd == "set_center" || cmd == "Z" || cmd == "z") {
     isCentering = false;
@@ -3140,6 +3160,12 @@ void sendHtmlWithNoCache() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(50);
+  steeringMutex = xSemaphoreCreateRecursiveMutex();
+  esp_timer_create_args_t pulseTimerArgs = {};
+  pulseTimerArgs.callback = steeringPulseTimeout;
+  pulseTimerArgs.dispatch_method = ESP_TIMER_TASK;
+  pulseTimerArgs.name = "steer_cutoff";
+  if (esp_timer_create(&pulseTimerArgs, &steeringTimer) != ESP_OK) steeringTimer = nullptr;
   
   // 1. Initialize WiFi Access Point IMMEDIATELY (Priority #1)
   WiFi.mode(WIFI_AP);
@@ -3203,8 +3229,11 @@ void setup() {
   Serial.println("BLE UART (TINK_Base_Platform) Started");
   
   // 5. Load Persistent Speed, Steering Limits, Volume, Theme, Driver, & Collision Avoidance from Flash
-  prefs.begin("tink_cfg", true);
-  driveSpeedPercent = prefs.getInt("speed", 60);
+  prefs.begin("tink_cfg", false); // Read/write for one-time reverse-speed migration.
+  const auto motorSettings = MotorPolicy::load(prefs);
+  driveSpeedPercent = motorSettings.forward;
+  reverseSpeedPercent = motorSettings.reverse;
+  steerPulseMs = motorSettings.pulseMs;
   steerSpeedPercent = prefs.getInt("s_spd", 75);
   driveRampMs = prefs.getInt("d_ramp", 400);
   steerRampMs = prefs.getInt("s_ramp", 250);
@@ -3232,6 +3261,7 @@ void setup() {
     lastHeartbeatMs = millis();
     int vPct = batteryVoltageMv > 0 ? (int)((maxDriveVoltageMv * 100) / batteryVoltageMv) : 100;
     String json = "{";
+    json += "\"speed\":" + String(driveSpeedPercent) + ",";
     json += "\"pin4\":\"" + String(currentDriveState == DRIVE_FORWARD ? "ON" : "OFF") + "\",";
     json += "\"pin5\":\"" + String(currentDriveState == DRIVE_BACK ? "ON" : "OFF") + "\",";
     json += "\"pin6\":\"" + String(currentSteerState == STEER_LEFT ? "ON" : "OFF") + "\",";
@@ -3244,6 +3274,8 @@ void setup() {
     json += "\"v_max\":" + String(maxDriveVoltageMv) + ",";
     json += "\"v_bat\":" + String(batteryVoltageMv) + ",";
     json += "\"v_pct\":" + String(constrain(vPct, 10, 100)) + ",";
+    json += "\"reverse_speed\":" + String(reverseSpeedPercent) + ",";
+    json += "\"steer_pulse_ms\":" + String(steerPulseMs) + ",";
     json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
     json += "\"is_homing\":" + String(isAutoHoming ? "true" : "false") + ",";
     json += "\"sonar_en\":" + String(collisionAvoidanceEnabled ? "true" : "false") + ",";
@@ -3272,8 +3304,11 @@ void setup() {
   server.on("/set_steer_driver", []() {
     if (server.hasArg("val")) {
       int d = server.arg("val").toInt();
-      stopSteering();
-      steerMotorDriver = (MotorDriverType)constrain(d, 0, 1);
+      {
+        SteeringGuard guard;
+        stopSteering();
+        steerMotorDriver = (MotorDriverType)constrain(d, 0, 1);
+      }
       prefs.begin("tink_cfg", false);
       prefs.putInt("s_driver", (int)steerMotorDriver);
       prefs.end();
@@ -3336,18 +3371,70 @@ void setup() {
 
   server.on("/auto_home", []() {
     processCommand("auto_home");
-    server.send(200, "text/plain", "Auto-Homing Started");
+    server.send(409, "text/plain", "Auto-home disabled: no steering position or limit feedback. Use manual pulses.");
   });
 
   server.on("/set_speed", []() {
-    if (server.hasArg("val")) {
-      driveSpeedPercent = constrain(server.arg("val").toInt(), 20, 100);
-      prefs.begin("tink_cfg", false);
-      prefs.putInt("speed", driveSpeedPercent);
-      prefs.end();
-      Serial.printf("Drive Speed Updated: %d%%\n", driveSpeedPercent);
+    int value;
+    if (!server.hasArg("val") || !MotorPolicy::parseSetting(server.arg("val").c_str(), 20, 100, value)) {
+      server.send(400, "application/json", "{\"error\":\"Expected integer 20-100\"}");
+      return;
     }
+    if (!prefs.begin("tink_cfg", false)) {
+      server.send(500, "application/json", "{\"error\":\"Settings unavailable\"}");
+      return;
+    }
+    size_t written = prefs.putInt("speed", value);
+    prefs.end();
+    if (written != sizeof(int32_t)) {
+      server.send(500, "application/json", "{\"error\":\"Setting not saved\"}");
+      return;
+    }
+    driveSpeedPercent = value;
+    updateMotorRamping();
     server.send(200, "application/json", "{\"speed\":" + String(driveSpeedPercent) + "}");
+  });
+
+  server.on("/set_reverse_speed", []() {
+    int value;
+    if (!server.hasArg("val") || !MotorPolicy::parseSetting(server.arg("val").c_str(), 20, 100, value)) {
+      server.send(400, "application/json", "{\"error\":\"Expected integer 20-100\"}");
+      return;
+    }
+    if (!prefs.begin("tink_cfg", false)) {
+      server.send(500, "application/json", "{\"error\":\"Settings unavailable\"}");
+      return;
+    }
+    size_t written = prefs.putInt("rev_spd", value);
+    prefs.end();
+    if (written != sizeof(int32_t)) {
+      server.send(500, "application/json", "{\"error\":\"Setting not saved\"}");
+      return;
+    }
+    reverseSpeedPercent = value;
+    updateMotorRamping();
+    server.send(200, "application/json", "{\"reverse_speed\":" + String(reverseSpeedPercent) + "}");
+  });
+
+  server.on("/set_steer_pulse", []() {
+    int value;
+    if (!server.hasArg("val") || !MotorPolicy::parseSetting(server.arg("val").c_str(), 20, 500, value)) {
+      server.send(400, "application/json", "{\"error\":\"Expected integer 20-500\"}");
+      return;
+    }
+    if (!prefs.begin("tink_cfg", false)) {
+      server.send(500, "application/json", "{\"error\":\"Settings unavailable\"}");
+      return;
+    }
+    size_t written = prefs.putInt("s_pulse", value);
+    prefs.end();
+    if (written != sizeof(int32_t)) {
+      server.send(500, "application/json", "{\"error\":\"Setting not saved\"}");
+      return;
+    }
+    steerPulseMs = value;
+    stopSteering();
+    server.send(200, "application/json", "{\"steer_pulse_ms\":" + String(steerPulseMs) + "}");
   });
 
   server.on("/set_volume", []() {
@@ -3429,6 +3516,8 @@ void setup() {
   server.on("/get_config", []() {
     String json = "{";
     json += "\"speed\":" + String(driveSpeedPercent) + ",";
+    json += "\"reverse_speed\":" + String(reverseSpeedPercent) + ",";
+    json += "\"steer_pulse_ms\":" + String(steerPulseMs) + ",";
     json += "\"steer_speed\":" + String(steerSpeedPercent) + ",";
     json += "\"steer_left\":" + String(steerLimitLeftMs) + ",";
     json += "\"steer_right\":" + String(steerLimitRightMs) + ",";
@@ -3510,7 +3599,7 @@ void setup() {
   server.on("/back", []() { processCommand("back"); server.send(200, "text/plain", "Back"); });
   server.on("/left", []() { processCommand("left"); server.send(200, "text/plain", "Left"); });
   server.on("/right", []() { processCommand("right"); server.send(200, "text/plain", "Right"); });
-  server.on("/center", []() { processCommand("center"); server.send(200, "text/plain", "Centering"); });
+  server.on("/center", []() { processCommand("center"); server.send(409, "text/plain", "Auto-center disabled: no steering feedback. Use manual pulses."); });
   server.on("/set_center", []() { processCommand("set_center"); server.send(200, "text/plain", "Center Set"); });
 
   // Captive Portal fallback route for iOS / Android auto-popup
@@ -3542,35 +3631,7 @@ void loop() {
   // Safe Asynchronous Gamepad Pairing
   handleGamepadConnectionLoop();
 
-  // Dynamic Drive Speed Controller (L298N Hardware PWM vs Relay Soft PWM)
-  if (currentDriveState == DRIVE_FORWARD || currentDriveState == DRIVE_BACK) {
-    if (driveMotorDriver == DRIVER_L298N) {
-      int pwmVal = map(driveSpeedPercent, 0, 100, 0, 255);
-      if (currentDriveState == DRIVE_FORWARD) {
-        analogWrite(pinBack, 0);
-        analogWrite(pinForward, pwmVal);
-      } else {
-        analogWrite(pinForward, 0);
-        analogWrite(pinBack, pwmVal);
-      }
-    } else {
-      // Relay Module (Time-sliced 120ms Soft PWM)
-      if (driveSpeedPercent >= 100) {
-        if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
-        else setRelayOn(pinBack);
-      } else {
-        unsigned long cycleMs = millis() % 120; // 120ms smooth time slice cycle
-        unsigned long onThresholdMs = (120 * driveSpeedPercent) / 100;
-        if (cycleMs < onThresholdMs) {
-          if (currentDriveState == DRIVE_FORWARD) setRelayOn(pinForward);
-          else setRelayOn(pinBack);
-        } else {
-          if (currentDriveState == DRIVE_FORWARD) setRelayOff(pinForward);
-          else setRelayOff(pinBack);
-        }
-      }
-    }
-  }
+  // Drive outputs are written only by updateMotorRamping(), never uncapped here.
 
   // Real-time Racing Simulator Dynamic Soundscape (Idle, Shifting, Drifting)
   updateSimulatorAudio();
@@ -3596,29 +3657,8 @@ void loop() {
   // Dynamic RGB LED & Audio Status (or Idle Rainbow)
   updateLedStatus();
   
-  // Steering Limits, Auto-Homing, & Centering Logic
-  if (isAutoHoming) {
-     handleAutoHomingLoop();
-  } else if (isCentering) {
-     if (currentPositionMs > 40) {
-         if (currentSteerState != STEER_LEFT) {
-             startSteeringLeft();
-         } else {
-             updateSteeringPosition();
-         }
-     } else if (currentPositionMs < -40) {
-         if (currentSteerState != STEER_RIGHT) {
-             startSteeringRight();
-         } else {
-             updateSteeringPosition();
-         }
-     } else {
-         stopSteering();
-         isCentering = false;
-         currentPositionMs = 0;
-         playSuccessChime();
-     }
-  } else {
+  // Estimated position limits are secondary; pulse timeout is always active.
+  SteeringGuard guard;
       if (steerLimitsEnabled) {
         if (currentSteerState == STEER_LEFT) {
           updateSteeringPosition();
@@ -3635,5 +3675,4 @@ void loop() {
       } else {
         updateSteeringPosition();
       }
-  }
 }
